@@ -1,0 +1,9 @@
+[package]
+name = "popup_input_to_file"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gtk4 = { version = "0.9.5" }
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1.42", features = ["full"] }
