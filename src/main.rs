@@ -1,8 +1,31 @@
 use gtk4 as gtk;
-use gtk::{Application, ApplicationWindow, Button, Entry, Box};
+use gtk::{glib, ApplicationWindow, Button, Entry, Box, Spinner};
+use adw::{Application};
 use gtk::prelude::*;
+// use gtk::subclass::prelude::*;
 use std::fs::File;
 use std::io::Write;
+
+use glib::{timeout_add_seconds_local};
+use std::rc::Rc;
+
+use std::cell::Cell;
+use glib::{ParamSpec, Properties, Value};
+
+#[derive(Properties, Default)]
+#[properties(wrapper_type = super::CustomButton)]
+pub struct SaveResults {
+    #[property(get, set)]
+    succes: Cell<bool>,
+    #[property(get, set)]
+    error: Cell<String>,
+}
+
+async fn some_computation() -> String {
+    "represents the result of the computation".to_string()
+}
+
+
 
 fn main() {
     let app = Application::builder().application_id("com.example.textpopup").build();
@@ -15,6 +38,8 @@ fn main() {
         .title("Enter Text")
         .build();
 
+        let window: Rc<ApplicationWindow> = Rc::new(window);
+
         let vbox =   Box::new(gtk::Orientation::Vertical, 5);
         // let hbox =   Box::new(gtk::Orientation::Horizontal, 5);
         let hbox =   Box::builder()
@@ -25,6 +50,7 @@ fn main() {
                      .homogeneous(true)
                      .hexpand(true)
                      .build();
+
         let button_s = Button::with_label("Start");
         let button_w = Button::with_label("worked at");
 
@@ -46,7 +72,20 @@ fn main() {
                 let mut file = File::create("output.txt").expect("Could not create file");
                 file.write_all(text.as_bytes()).expect("Could not write to file");
             }
-            window.close();
+
+            tokio::spawn(async move {
+                let res = some_computation();
+            });
+
+            let window_clone: Rc<ApplicationWindow> = Rc::clone(&window);
+            timeout_add_seconds_local(1, move || {
+                let spinner = Spinner::new();
+                spinner.start();
+                window_clone.set_child(Some(&spinner));
+                glib::ControlFlow::Break // Stop the timeout
+            });
+            // window.present();
+            // window.close();
         });
     });
 
