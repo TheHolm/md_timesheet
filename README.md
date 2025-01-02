@@ -62,6 +62,7 @@ Compiled executable will be in target/release/md_timesheet
 * Tests?
 * Joplin note support
 * Packaging for Debian/Ubuntu and possibly something else.
+* Improved formatting for the tables with all columns of the same width so that they are easily readable as text.
 
 # Notes:
 * API DOC https://joplinapp.org/help/api/references/rest_api/
