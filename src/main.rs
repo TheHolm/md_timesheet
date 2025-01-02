@@ -134,17 +134,25 @@ fn click_start() {
               process::exit(1);
         },
         Ok(mut lines) => {
-            let date_and_time: String = Local::now().naive_local().format("%d/%m/%Y %H:%M").to_string(); // we will need in any case
+            let current_datetime = Local::now().naive_local(); // we will need in any case
 
             if  lines.len() == 0 { // empty file
-                lines.append(&mut new_day(&Local::now().naive_local(),&record_format));
-                lines.push(date_and_time);
+                lines.append(&mut new_day(&current_datetime,&record_format));
+                lines.push(current_datetime.format("%d/%m/%Y %H:%M").to_string());
             } else {
                 if let Some(last_line) = lines.last_mut() {
                     let format = "%d/%m/%Y %H:%M";
                     match NaiveDateTime::parse_from_str(last_line, format) {
-                        Ok(_naive_datetime) => { // The last line contains only the date and time.
-                            *last_line = date_and_time;
+                        Ok(previous_datetime) => { // The last line contains only the date and time.
+                            if previous_datetime.date() == current_datetime.date() {
+                                lines.pop();
+                                lines.push(current_datetime.format("%d/%m/%Y %H:%M").to_string());
+                            } else { // new day started.
+                                lines.pop();
+                                lines.push("".to_string());
+                                lines.append(&mut new_day(&current_datetime,&record_format));
+                                lines.push(current_datetime.format("%d/%m/%Y %H:%M").to_string());
+                            };
                         }
                         Err(e) => {
                             println!("Failed to parse date: {}", e);
@@ -200,6 +208,7 @@ fn click_worked(entry: gtk::Entry) {
                                 } else { // new day started.
                                     lines.pop();
                                     lines.append(&mut new_entry(text, &previous_datetime, &current_datetime, &record_format));
+                                    lines.push("".to_string());
                                     lines.append(&mut new_day(&current_datetime,&record_format));
                                     lines.push(current_datetime.format("%d/%m/%Y %H:%M").to_string());
                                 }
