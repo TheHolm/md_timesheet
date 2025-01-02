@@ -2,7 +2,7 @@
 
 **!!! WORK IN PROGRESS !!!** ( but usable )
 
-This is a simple tool to create creating timesheets. At present, only file storage is supported, and the file path is hardcoded as (./timesheet.markdown). Support for Joplin is in the pipeline.
+This is a simple GTK4 program for creating timesheets formatted in Markdown. At present, only file storage is supported, and the file path is hardcoded as (./timesheet.markdown). Support for Joplin is in the pipeline.
 
 # How to use
 
@@ -39,6 +39,20 @@ last line contains timestamp of last operation formated as  %d/%m/%Y %H:%M (exam
 * worked at - get last timestamp calculate duration add line to table add current timestamp to the end of document
 if last timestamp was yesterday, add "worked at" to last day and start new day.
 
+# Compiling
+
+Needs Rust 1.73. The *docker* folder contains a *Dockerfile* that can be used to compile the project.
+
+```
+git clone git@github.com:TheHolm/md_timesheet.git
+cd docker
+sudo docker build .
+sudo docker run -ti --name rust-joplin -v "../":/code rust:local
+cd /code
+cargo build --release
+```
+Compiled executable will be in target/release/md_timesheet
+
 # TODO
 
 * Proper error handling; a popup window needs to be displayed instead of writing to STDERR.
@@ -47,8 +61,7 @@ if last timestamp was yesterday, add "worked at" to last day and start new day.
 * Check the last non-empty line for the timestamp instead of just the last line.
 * Tests?
 * Joplin note support
-
-
+* Packaging for Debian/Ubuntu and possibly something else.
 
 # Notes:
 * API DOC https://joplinapp.org/help/api/references/rest_api/
