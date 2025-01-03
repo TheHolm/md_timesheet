@@ -31,7 +31,7 @@ last line contains timestamp of last operation formated as  %d/%m/%Y %H:%M (exam
 
 # GUI Buttons  
 "Start" - Begin time tracking; the text field is ignored.  
-"Worked at" - The task you completed. The text field is added to the description column.  
+"Worked on" - The task you completed. The text field is added to the description column.  
 
 # button actions
 

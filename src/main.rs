@@ -269,7 +269,7 @@ fn main() {
                      .build();
 
         let button_s = Button::with_label("Start");
-        let button_w = Button::with_label("worked at");
+        let button_w = Button::with_label("Worked on");
 
         hbox.append(&button_s);
         hbox.append(&button_w);
