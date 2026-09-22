@@ -224,7 +224,9 @@ pub fn cwd_config_path(cwd: &Path) -> PathBuf {
 ///
 /// The path given by the `-c`/`--config` option wins and must exist. Otherwise
 /// the current folder (`./md_timesheet.config`) is checked, then the XDG config
-/// directory. Returns `Ok(None)` when no config file exists.
+/// directory. The XDG file may itself be a pointer containing `config_path =`,
+/// in which case the referenced file is used. Returns `Ok(None)` when no config
+/// file exists.
 pub fn locate_config(
     cli_config: Option<&Path>,
     cwd: &Path,
@@ -245,11 +247,68 @@ pub fn locate_config(
 
     if let Ok(xdg_path) = canonical_config_path(xdg_config_home, home) {
         if xdg_path.is_file() {
-            return Ok(Some(xdg_path));
+            let contents = fs::read_to_string(&xdg_path).map_err(|e| {
+                format!("Error reading config file '{}': {}", xdg_path.display(), e)
+            })?;
+            return match pointer_target(&contents) {
+                Some(target) => {
+                    if target.is_file() {
+                        Ok(Some(target))
+                    } else {
+                        Err(format!(
+                            "Config pointer '{}' points at '{}', which does not exist.",
+                            xdg_path.display(),
+                            target.display()
+                        ))
+                    }
+                }
+                None => Ok(Some(xdg_path)),
+            };
         }
     }
 
     Ok(None)
+}
+
+/// Extracts the config file path from a `config_path =` pointer.
+///
+/// Returns `None` when `contents` is not a pointer, which is how the XDG config
+/// file distinguishes a pointer from a regular configuration. Comments and
+/// blank lines are ignored, matching [`parse_config`].
+pub fn pointer_target(contents: &str) -> Option<PathBuf> {
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            if key.trim() == "config_path" {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Some(PathBuf::from(value));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Writes `contents` to the config file at `path`, creating parent directories.
+pub fn write_config(path: &Path, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Error creating directory '{}': {}", parent.display(), e))?;
+        }
+    }
+    fs::write(path, contents)
+        .map_err(|e| format!("Error writing config file '{}': {}", path.display(), e))
+}
+
+/// Writes a pointer at `xdg_path` referencing the config file at `target`.
+pub fn write_pointer(xdg_path: &Path, target: &Path) -> Result<(), String> {
+    let contents = format!("config_path = {}\n", target.display());
+    write_config(xdg_path, &contents)
 }
 
 /// Reads and parses the config file at `path`.

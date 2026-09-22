@@ -4,7 +4,8 @@ use std::path::Path;
 
 use md_timesheet::{
     canonical_config_path, cwd_config_path, load_config_from, locate_config, parse_config,
-    serialize_config, xdg_config_dir, Config, Destination, RecordsFormat, RECORD_FORMAT,
+    pointer_target, serialize_config, write_config, write_pointer, xdg_config_dir, Config,
+    Destination, RecordsFormat, RECORD_FORMAT,
 };
 
 /// The built-in default configuration.
@@ -238,4 +239,73 @@ fn load_reads_and_parses() {
     std::fs::write(&path, serialize_config(&custom_config()).unwrap()).unwrap();
 
     assert_eq!(load_config_from(&path).unwrap(), custom_config());
+}
+
+/// A pointer file's `config_path` is extracted, ignoring comments and blanks.
+#[test]
+fn pointer_target_reads_config_path() {
+    let contents = "# a pointer\n\nconfig_path = /etc/md_timesheet/config\n";
+    assert_eq!(
+        pointer_target(contents),
+        Some(Path::new("/etc/md_timesheet/config").to_path_buf())
+    );
+}
+
+/// A regular configuration is not mistaken for a pointer.
+#[test]
+fn pointer_target_none_for_regular_config() {
+    assert_eq!(
+        pointer_target(&md_timesheet::default_config_contents()),
+        None
+    );
+}
+
+/// Writing a pointer is readable back by `pointer_target`.
+#[test]
+fn write_pointer_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let pointer_path = dir.path().join("config");
+    let target = dir.path().join("real.config");
+
+    write_pointer(&pointer_path, &target).unwrap();
+
+    let contents = std::fs::read_to_string(&pointer_path).unwrap();
+    assert_eq!(pointer_target(&contents), Some(target));
+}
+
+/// `write_config` creates missing parent directories.
+#[test]
+fn write_config_creates_parent_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested").join("deeper").join("config");
+
+    write_config(&path, "hello").unwrap();
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+}
+
+/// The XDG file may point at a config stored elsewhere.
+#[test]
+fn locate_follows_xdg_pointer() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("real.config");
+    std::fs::write(&target, serialize_config(&default_config()).unwrap()).unwrap();
+
+    let xdg_home = dir.path().join("xdg");
+    let pointer_path = canonical_config_path(Some(xdg_home.to_str().unwrap()), None).unwrap();
+    write_pointer(&pointer_path, &target).unwrap();
+
+    let found = locate_config(None, dir.path(), Some(xdg_home.to_str().unwrap()), None).unwrap();
+    assert_eq!(found, Some(target));
+}
+
+/// A pointer referencing a missing file is an error.
+#[test]
+fn locate_dangling_pointer_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let xdg_home = dir.path().join("xdg");
+    let pointer_path = canonical_config_path(Some(xdg_home.to_str().unwrap()), None).unwrap();
+    write_pointer(&pointer_path, &dir.path().join("missing.config")).unwrap();
+
+    assert!(locate_config(None, dir.path(), Some(xdg_home.to_str().unwrap()), None).is_err());
 }

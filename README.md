@@ -14,7 +14,11 @@ for the file in this order and uses the first one it finds:
 3. `$XDG_CONFIG_HOME/md_timesheet/config`, falling back to
    `$HOME/.config/md_timesheet/config`.
 
-If no config file is found the program exits with an error.
+If no config file is found, the program shows a dialog offering to create one:
+in the XDG config directory, in the current folder, or at a path you choose.
+When the current folder or a custom path is used, a small pointer to that file
+is written to `$XDG_CONFIG_HOME/md_timesheet/config` so it is found again on the
+next launch.
 
 The file has the following keys, all of which are required:
 
@@ -35,8 +39,7 @@ Lines starting with `#` and blank lines are ignored.
 
 # How to use
 
-* Create a config file (see above), for example `./md_timesheet.config`.
-* Configure the desktop environment to start the program on a keystroke.
+* On the first launch, let the program create a config file (or create one yourself, see above), then configure the desktop environment to start the program on a keystroke.
 * Launch it for the first time and press the "Start" button. The program will create the timesheet file configured via *file_path*, add a day header to it, and then terminate. (The program always terminates after any button is clicked; this is not a bug but a feature! :-) )
 * When you **finish** working on a task, start it again by entering the task description into the entry field and pressing "worked at". This will add an entry to the existing table and terminate. If you worked past midnight, the entry will be added to the previous day, and a new table for the current day will be created.
 * When you begin your day or return from a break, click "start" to begin.
