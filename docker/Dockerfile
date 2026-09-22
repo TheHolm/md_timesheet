@@ -1,4 +1,4 @@
-FROM rust:1.73.0-bookworm
+FROM rust:1.98-trixie
 RUN useradd -d /code -c "The User" -M user
 RUN apt update && apt install -y libasound2-dev libxcb-xfixes0-dev libxcb-shape0-dev
 RUN apt install -y libpango1.0-dev

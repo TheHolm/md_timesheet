@@ -41,13 +41,13 @@ if last timestamp was yesterday, add "worked at" to last day and start new day.
 
 # Compiling
 
-Needs Rust 1.73. The *docker* folder contains a *Dockerfile* that can be used to compile the project.
+Needs Rust 1.78 or newer (the committed `Cargo.lock` uses lockfile format v4). The *docker* folder contains a *Dockerfile* that can be used to compile the project.
 
 ```
 git clone git@github.com:TheHolm/md_timesheet.git
 cd docker
-sudo docker build .
-sudo docker run -ti --name rust-joplin -v "../":/code rust:local
+sudo docker build -t md_timesheet_build .
+sudo docker run -ti --name rust-joplin -v "../":/code md_timesheet_build
 cd /code
 cargo build --release
 ```
