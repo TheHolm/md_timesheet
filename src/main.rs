@@ -423,7 +423,10 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
     let settings_button = Button::builder()
         .icon_name("emblem-system-symbolic")
         .tooltip_text("Settings")
+        .has_frame(false)
+        .valign(gtk::Align::Center)
         .build();
+    settings_button.add_css_class("flat");
     settings_button.connect_clicked({
         let app = app.clone();
         let window = window.clone();
