@@ -43,6 +43,17 @@ fn last_entry_description_header_only() {
     assert_eq!(last_entry_description(&january_second()), None);
 }
 
+/// A description-only row (all optional columns disabled) is still an entry.
+#[test]
+fn last_entry_description_single_column_row() {
+    let lines = vec!["| Doing Stuff |".to_string()];
+
+    assert_eq!(
+        last_entry_description(&lines),
+        Some("Doing Stuff".to_string())
+    );
+}
+
 /// The description of the single entry is returned.
 #[test]
 fn last_entry_description_single_entry() {
