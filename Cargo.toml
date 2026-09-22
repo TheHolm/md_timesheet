@@ -1,6 +1,6 @@
 [package]
 name = "md_timesheet"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Keep your hours in a Markdown timesheet with a GTK4/libadwaita app"
 license = "AGPL-3.0-or-later"

@@ -6,6 +6,36 @@ changes** summary (what also appears in the GitHub Release body) and a
 added at the top. `scripts/extract-release-notes.sh` prints just one release's
 section for the GitHub Release body.
 
+## v0.3.1 — Prebuilt packages for every release
+
+### User-facing changes
+
+- No changes to `md_timesheet` itself.
+- Tagged releases now ship ready-to-install packages on the GitHub Releases
+  page: a Debian trixie `.deb`, an Ubuntu 26.04 `.deb`, and a best-effort
+  FreeBSD 15 `.pkg` (all amd64), alongside GitHub's own source archive.
+
+### Details
+
+- Added `.woodpecker/release.yaml`, a tag-triggered workflow (`event: tag`,
+  `ref: refs/tags/v*`). Its three package steps are independent
+  (`depends_on: []`): `deb-trixie`, `deb-ubuntu2604` and `freebsd-pkg`;
+  `publish-github-release` waits for all three and uploads them to a GitHub
+  Release. The `freebsd-pkg` step is `failure: ignore`, so a FreeBSD
+  breakage never blocks the Linux release.
+- Added `scripts/fetch-freebsd-gtk.py`, which assembles the GTK4/libadwaita
+  cross sysroot by resolving the `gtk4`/`libadwaita` closure from
+  `pkg.freebsd.org`'s `packagesite.pkg` and unpacking it, stubbing any
+  build-only `Requires.private` `.pc` files that are missing.
+- Added `scripts/build-freebsd-pkg.py` (writes a `.pkg` from a staged tree,
+  recording the GTK runtime deps) and `scripts/extract-release-notes.sh`
+  (renders one release's section as the GitHub Release body).
+- `Cargo.toml`: added `[package.metadata.deb]`, `description` and `license`,
+  and built `reqwest` with `default-features = false`. The unused TLS stack it
+  used to pull in (OpenSSL/native-tls) could not be satisfied for the FreeBSD
+  cross-link.
+- Documented FreeBSD as best effort in `README.md` and `AGENTS.md`.
+
 ## v0.3.0 — Configuration files, settings window and amend mode
 
 ### User-facing changes
