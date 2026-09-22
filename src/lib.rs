@@ -1,0 +1,282 @@
+//! Non-GUI logic for `md_timesheet`.
+//!
+//! Everything that can be exercised without a GTK main loop lives here: the
+//! storage destinations, the Markdown records format, file I/O, Markdown
+//! generation and the pure state transitions used by the "Start" and
+//! "Worked on" buttons. Keeping this out of `main.rs` lets the GUI and the
+//! integration tests share exactly one implementation.
+
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+
+use chrono::prelude::*;
+
+/// The timestamp format written on the final line of the document and used
+/// to parse when the previous action happened.
+const TIMESTAMP_FORMAT: &str = "%d/%m/%Y %H:%M";
+
+/// Connection details for a Joplin note used as storage.
+///
+/// Joplin support is not implemented yet; the type exists so that
+/// [`Destination`] can carry the configuration once it is.
+pub struct JoplinNote {
+    /// The Joplin note identifier.
+    pub id: String,
+    /// The Joplin REST API base URL.
+    pub url: String,
+    /// The Joplin REST API token.
+    pub api_key: String,
+}
+
+/// Which columns a table header and its rows contain.
+pub struct RecordsFormat {
+    /// Include a "Start Time" column.
+    pub start_time: bool,
+    /// Include an "End Time" column.
+    pub end_time: bool,
+    /// Include a "Duration" column.
+    pub duration: bool,
+    /// Round durations up to the next multiple of this many minutes.
+    pub duration_rounding: i32,
+}
+
+/// Where the timesheet document is stored.
+pub enum Destination {
+    /// A Markdown file at the contained path.
+    TextFile(String),
+    /// A Joplin note (not implemented yet).
+    JoplinNote(JoplinNote),
+}
+
+/// Default record format: all columns enabled, durations rounded up to 10
+/// minutes.
+pub const RECORD_FORMAT: RecordsFormat = RecordsFormat {
+    start_time: true,
+    end_time: true,
+    duration: true,
+    duration_rounding: 10,
+};
+
+/// Reads the whole document as a list of lines.
+///
+/// For [`Destination::TextFile`] the file is created when missing, so reading
+/// a not-yet-existing timesheet yields an empty vector rather than an error.
+/// [`Destination::JoplinNote`] is not implemented and always errors.
+pub fn read_document(dest: &Destination) -> Result<Vec<String>, String> {
+    match dest {
+        Destination::JoplinNote(_) => Err("Joplin support has not been implemented.".to_string()),
+        Destination::TextFile(file_path) => {
+            let file: Result<std::fs::File, std::io::Error> = fs::OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create(true)
+                .truncate(false)
+                .open(file_path);
+            match file {
+                Err(e) => Err(format!(
+                    "Error opening file for reading or creating a new file: {}",
+                    e
+                )),
+                Ok(file) => {
+                    let reader = BufReader::new(file);
+                    let lines: Result<Vec<String>, std::io::Error> =
+                        reader.lines().collect::<Result<_, _>>();
+                    match lines {
+                        Err(e) => Err(format!(
+                            "Error while splitting file content into lines: {}",
+                            e
+                        )),
+                        Ok(lines) => Ok(lines),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Overwrites the document with `lines`, one line per element.
+///
+/// For [`Destination::TextFile`] the file is truncated first.
+/// [`Destination::JoplinNote`] is not implemented and always errors.
+pub fn write_document(dest: &Destination, lines: Vec<String>) -> Result<(), String> {
+    match dest {
+        Destination::JoplinNote(_) => Err("Joplin support has not been implemented.".to_string()),
+        Destination::TextFile(file_path) => {
+            let file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(file_path);
+            match file {
+                Err(_) => Err("Error opening file for write".to_string()),
+                Ok(mut file) => {
+                    for line in lines {
+                        writeln!(file, "{}", line).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+/// Builds the lines that start a new day: the heading, a blank line and the
+/// table header (with only the columns enabled in `format`).
+pub fn new_day(date: &NaiveDateTime, format: &RecordsFormat) -> Vec<String> {
+    let mut day_header: Vec<String> = Vec::new();
+    day_header.push(format!("{}{}", "#  ", date.format("%e %B")));
+    day_header.push("".to_string());
+
+    let mut columns: Vec<String> = Vec::new();
+    columns.push("Description".to_string());
+    if format.start_time {
+        columns.push("Start Time".to_string());
+    }
+    if format.end_time {
+        columns.push("End Time".to_string());
+    }
+    if format.duration {
+        columns.push("Duration".to_string());
+    }
+
+    day_header.push(format!("| {} |", columns.join(" | ")));
+    day_header.push(format!(
+        "| {} |",
+        columns
+            .iter()
+            .map(|_| "---")
+            .collect::<Vec<&str>>()
+            .join(" | ")
+    ));
+
+    day_header
+}
+
+/// Builds the single table row describing a completed task.
+///
+/// The duration is rounded up to the next multiple of
+/// `format.duration_rounding` minutes and printed as `HH:MM`.
+pub fn new_entry(
+    description: String,
+    start_date: &NaiveDateTime,
+    end_date: &NaiveDateTime,
+    format: &RecordsFormat,
+) -> Vec<String> {
+    let time_format = "%H:%M";
+    let mut day_header: Vec<String> = Vec::new();
+
+    let duration: i64 = end_date.signed_duration_since(*start_date).num_minutes();
+    let duration: i64 = (duration / format.duration_rounding as i64)
+        * format.duration_rounding as i64
+        + if duration % (format.duration_rounding as i64) > 0 {
+            format.duration_rounding as i64
+        } else {
+            0
+        };
+
+    let mut columns: Vec<String> = Vec::new();
+    columns.push(description);
+    if format.start_time {
+        columns.push(start_date.format(time_format).to_string());
+    }
+    if format.end_time {
+        columns.push(end_date.format(time_format).to_string());
+    }
+    if format.duration {
+        columns.push(format!("{:02}:{:02}", duration / 60, duration % 60));
+    }
+
+    day_header.push(format!("| {} |", columns.join(" | ")));
+
+    day_header
+}
+
+/// Applies the "Start" action to `lines` in place.
+///
+/// The current timestamp is written to the final line. On an empty document a
+/// whole new day is created first; when the previous timestamp belongs to an
+/// earlier day a fresh day is inserted before it.
+///
+/// Returns `Err` when the final line is not a parsable timestamp, leaving
+/// `lines` unchanged in that case.
+pub fn apply_start(
+    lines: &mut Vec<String>,
+    current_datetime: NaiveDateTime,
+    format: &RecordsFormat,
+) -> Result<(), String> {
+    if lines.is_empty() {
+        lines.append(&mut new_day(&current_datetime, format));
+        lines.push(current_datetime.format(TIMESTAMP_FORMAT).to_string());
+    } else if let Some(last_line) = lines.last() {
+        match NaiveDateTime::parse_from_str(last_line, TIMESTAMP_FORMAT) {
+            Ok(previous_datetime) => {
+                if previous_datetime.date() == current_datetime.date() {
+                    lines.pop();
+                    lines.push(current_datetime.format(TIMESTAMP_FORMAT).to_string());
+                } else {
+                    lines.pop();
+                    lines.push("".to_string());
+                    lines.append(&mut new_day(&current_datetime, format));
+                    lines.push(current_datetime.format(TIMESTAMP_FORMAT).to_string());
+                }
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
+}
+
+/// Applies the "Worked on" action to `lines` in place.
+///
+/// `description` is added as a table row spanning from the previous timestamp
+/// to `current_datetime`, which is then written to the final line. On an empty
+/// document a whole new day is created first; when the previous timestamp
+/// belongs to an earlier day the entry is added to that day and a new day is
+/// started afterwards.
+///
+/// Returns `Err` when the final line is not a parsable timestamp, leaving
+/// `lines` unchanged in that case.
+pub fn apply_worked(
+    lines: &mut Vec<String>,
+    description: String,
+    current_datetime: NaiveDateTime,
+    format: &RecordsFormat,
+) -> Result<(), String> {
+    if lines.is_empty() {
+        lines.append(&mut new_day(&current_datetime, format));
+        lines.append(&mut new_entry(
+            description,
+            &current_datetime,
+            &current_datetime,
+            format,
+        ));
+        lines.push(current_datetime.format(TIMESTAMP_FORMAT).to_string());
+    } else if let Some(last_line) = lines.last() {
+        match NaiveDateTime::parse_from_str(last_line, TIMESTAMP_FORMAT) {
+            Ok(previous_datetime) => {
+                if previous_datetime.date() == current_datetime.date() {
+                    lines.pop();
+                    lines.append(&mut new_entry(
+                        description,
+                        &previous_datetime,
+                        &current_datetime,
+                        format,
+                    ));
+                    lines.push(current_datetime.format(TIMESTAMP_FORMAT).to_string());
+                } else {
+                    lines.pop();
+                    lines.append(&mut new_entry(
+                        description,
+                        &previous_datetime,
+                        &current_datetime,
+                        format,
+                    ));
+                    lines.push("".to_string());
+                    lines.append(&mut new_day(&current_datetime, format));
+                    lines.push(current_datetime.format(TIMESTAMP_FORMAT).to_string());
+                }
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
+}
