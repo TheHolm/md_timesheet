@@ -9,3 +9,6 @@ gtk4 = { version = "0.9", package = "gtk4", features = ["v4_8"] }
 once_cell = {version = "1.20" }
 reqwest = { version = "0.12", features = ["json"] }
 chrono = { version = "0.4" }
+
+[dev-dependencies]
+tempfile = "3"
