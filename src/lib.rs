@@ -10,6 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 
 use chrono::prelude::*;
+use chrono::Duration;
 
 /// The timestamp format written on the final line of the document and used
 /// to parse when the previous action happened.
@@ -278,5 +279,96 @@ pub fn apply_worked(
             Err(e) => return Err(e.to_string()),
         }
     }
+    Ok(())
+}
+
+/// Returns the index of the last entry row in `lines`, if there is one.
+///
+/// Only table data rows count; the day header's column header and its `---`
+/// separator are ignored.
+fn last_entry_index(lines: &[String]) -> Option<usize> {
+    lines.iter().rposition(|line| is_entry_row(line))
+}
+
+/// Returns whether `line` is a table data row rather than the header or the
+/// separator.
+fn is_entry_row(line: &str) -> bool {
+    matches!(first_cell(line), Some(cell) if cell != "Description" && cell != "---")
+}
+
+/// Extracts the first cell of a Markdown table `line`.
+///
+/// Returns `None` when `line` is not a `| ... |` row.
+fn first_cell(line: &str) -> Option<&str> {
+    let inner = line.strip_prefix("| ")?.strip_suffix(" |")?;
+    match inner.split_once(" | ") {
+        Some((cell, _rest)) => Some(cell),
+        None => Some(inner),
+    }
+}
+
+/// Extracts the start time from an entry row that has a "Start Time" column.
+fn entry_start_time(line: &str) -> Option<NaiveTime> {
+    let inner = line.strip_prefix("| ")?.strip_suffix(" |")?;
+    let (_description, rest) = inner.split_once(" | ")?;
+    let (start, _rest) = rest.split_once(" | ")?;
+    NaiveTime::parse_from_str(start, "%H:%M").ok()
+}
+
+/// Returns the description of the last entry in the document, if there is one.
+///
+/// The day header and its separator are ignored, so a document that only
+/// contains day headers yields `None`.
+pub fn last_entry_description(lines: &[String]) -> Option<String> {
+    let index = last_entry_index(lines)?;
+    first_cell(&lines[index]).map(|cell| cell.to_string())
+}
+
+/// Applies the "amend last entry" action to `lines` in place.
+///
+/// The last entry row keeps its start time but gets the new `description`, an
+/// end time of `current_datetime` and a recomputed duration; the trailing
+/// timestamp is then updated. When the stored start time is later than
+/// `current_datetime` (the entry actually started before midnight) the start is
+/// moved back one day.
+///
+/// Requires the format to include the "Start Time" column. Returns `Err`,
+/// leaving `lines` unchanged, when there is no entry, the start time cannot be
+/// parsed, or the final line is not a valid timestamp.
+pub fn amend_last_entry(
+    lines: &mut [String],
+    description: String,
+    current_datetime: NaiveDateTime,
+    format: &RecordsFormat,
+) -> Result<(), String> {
+    if !format.start_time {
+        return Err("Cannot amend without a Start Time column.".to_string());
+    }
+
+    let index = last_entry_index(lines).ok_or_else(|| "There is no entry to amend.".to_string())?;
+
+    let start_time = entry_start_time(&lines[index])
+        .ok_or_else(|| "The last entry has no parsable start time.".to_string())?;
+
+    let last_line = lines
+        .last()
+        .ok_or_else(|| "There is no entry to amend.".to_string())?;
+    if NaiveDateTime::parse_from_str(last_line, TIMESTAMP_FORMAT).is_err() {
+        return Err("The last line is not a valid timestamp.".to_string());
+    }
+
+    let mut start_datetime = current_datetime.date().and_time(start_time);
+    if start_datetime > current_datetime {
+        start_datetime -= Duration::days(1);
+    }
+
+    let mut row = new_entry(description, &start_datetime, &current_datetime, format);
+    lines[index] = row
+        .pop()
+        .ok_or_else(|| "Could not build the amended entry.".to_string())?;
+
+    let last_index = lines.len() - 1;
+    lines[last_index] = current_datetime.format(TIMESTAMP_FORMAT).to_string();
+
     Ok(())
 }
