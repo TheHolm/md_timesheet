@@ -3,9 +3,9 @@
 use std::path::Path;
 
 use md_timesheet::{
-    canonical_config_path, cwd_config_path, load_config_from, locate_config, parse_config,
-    pointer_target, serialize_config, write_config, write_pointer, xdg_config_dir, Config,
-    Destination, RecordsFormat, RECORD_FORMAT,
+    canonical_config_path, cwd_config_path, expand_tilde, load_config_from, locate_config,
+    parse_config, pointer_target, serialize_config, write_config, write_pointer, xdg_config_dir,
+    Config, Destination, RecordsFormat, RECORD_FORMAT,
 };
 
 /// The built-in default configuration.
@@ -38,7 +38,7 @@ end_time = true
 duration = true
 duration_rounding = 15
 ";
-    let config = parse_config(contents).unwrap();
+    let config = parse_config(contents, None).unwrap();
     assert_eq!(
         config.destination,
         Destination::TextFile("/tmp/timesheet.markdown".to_string())
@@ -57,48 +57,48 @@ duration_rounding = 15
 /// An unknown key is rejected and named in the error.
 #[test]
 fn parse_unknown_key_errors() {
-    let error = parse_config("file_path = x\nnonsense = 1\n").unwrap_err();
+    let error = parse_config("file_path = x\nnonsense = 1\n", None).unwrap_err();
     assert!(error.contains("nonsense"));
 }
 
 /// A non-boolean value for a column flag is rejected and named in the error.
 #[test]
 fn parse_malformed_bool_errors() {
-    let error = parse_config("start_time = yes\n").unwrap_err();
+    let error = parse_config("start_time = yes\n", None).unwrap_err();
     assert!(error.contains("start_time"));
 }
 
 /// A non-integer rounding value is rejected and named in the error.
 #[test]
 fn parse_malformed_rounding_errors() {
-    let error = parse_config("duration_rounding = ten\n").unwrap_err();
+    let error = parse_config("duration_rounding = ten\n", None).unwrap_err();
     assert!(error.contains("duration_rounding"));
 }
 
 /// A zero or negative rounding value is rejected.
 #[test]
 fn parse_non_positive_rounding_errors() {
-    assert!(parse_config("duration_rounding = 0\n").is_err());
-    assert!(parse_config("duration_rounding = -5\n").is_err());
+    assert!(parse_config("duration_rounding = 0\n", None).is_err());
+    assert!(parse_config("duration_rounding = -5\n", None).is_err());
 }
 
 /// A missing required key is reported.
 #[test]
 fn parse_missing_key_errors() {
-    let error = parse_config("file_path = x\n").unwrap_err();
+    let error = parse_config("file_path = x\n", None).unwrap_err();
     assert!(error.contains("Missing"));
 }
 
 /// A line without an `=` sign is reported.
 #[test]
 fn parse_line_without_equals_errors() {
-    assert!(parse_config("just some text\n").is_err());
+    assert!(parse_config("just some text\n", None).is_err());
 }
 
 /// Comments and blank lines are ignored, so the default text parses cleanly.
 #[test]
 fn parse_default_contents() {
-    let config = parse_config(&md_timesheet::default_config_contents()).unwrap();
+    let config = parse_config(&md_timesheet::default_config_contents(), None).unwrap();
     assert_eq!(config, default_config());
 }
 
@@ -107,7 +107,7 @@ fn parse_default_contents() {
 fn serialize_then_parse_roundtrip() {
     let config = custom_config();
     let text = serialize_config(&config).unwrap();
-    assert_eq!(parse_config(&text).unwrap(), config);
+    assert_eq!(parse_config(&text, None).unwrap(), config);
 }
 
 /// A Joplin destination cannot be represented as a config file.
@@ -228,7 +228,7 @@ fn locate_returns_none_when_nothing_found() {
 #[test]
 fn load_missing_file_errors() {
     let dir = tempfile::tempdir().unwrap();
-    assert!(load_config_from(&dir.path().join("config")).is_err());
+    assert!(load_config_from(&dir.path().join("config"), None).is_err());
 }
 
 /// A written config is read back as the same configuration.
@@ -238,7 +238,7 @@ fn load_reads_and_parses() {
     let path = dir.path().join("config");
     std::fs::write(&path, serialize_config(&custom_config()).unwrap()).unwrap();
 
-    assert_eq!(load_config_from(&path).unwrap(), custom_config());
+    assert_eq!(load_config_from(&path, None).unwrap(), custom_config());
 }
 
 /// A pointer file's `config_path` is extracted, ignoring comments and blanks.
@@ -308,4 +308,92 @@ fn locate_dangling_pointer_errors() {
     write_pointer(&pointer_path, &dir.path().join("missing.config")).unwrap();
 
     assert!(locate_config(None, dir.path(), Some(xdg_home.to_str().unwrap()), None).is_err());
+}
+
+/// A leading `~/` and a bare `~` are expanded to the home directory.
+#[test]
+fn expand_tilde_expands_home() {
+    assert_eq!(
+        expand_tilde("~/Documents/timesheet.markdown", Some("/home/me")),
+        "/home/me/Documents/timesheet.markdown"
+    );
+    assert_eq!(expand_tilde("~", Some("/home/me")), "/home/me");
+}
+
+/// Paths without a leading `~` are left unchanged.
+#[test]
+fn expand_tilde_leaves_other_paths() {
+    assert_eq!(
+        expand_tilde("./timesheet.markdown", Some("/home/me")),
+        "./timesheet.markdown"
+    );
+    assert_eq!(
+        expand_tilde("/tmp/timesheet.markdown", Some("/home/me")),
+        "/tmp/timesheet.markdown"
+    );
+    assert_eq!(expand_tilde("a~/b", Some("/home/me")), "a~/b");
+}
+
+/// Without a home directory, `~` is left unchanged.
+#[test]
+fn expand_tilde_without_home_is_unchanged() {
+    assert_eq!(expand_tilde("~/x", None), "~/x");
+    assert_eq!(expand_tilde("~/x", Some("")), "~/x");
+}
+
+/// Parsing expands a `~/` in `file_path` using the supplied home directory.
+#[test]
+fn parse_expands_tilde_in_file_path() {
+    let contents = "\
+file_path = ~/Documents/timesheet.markdown
+start_time = true
+end_time = true
+duration = true
+duration_rounding = 10
+";
+    let config = parse_config(contents, Some("/home/me")).unwrap();
+    assert_eq!(
+        config.destination,
+        Destination::TextFile("/home/me/Documents/timesheet.markdown".to_string())
+    );
+}
+
+/// Without a home directory, a `~/` path is kept literal.
+#[test]
+fn parse_without_home_keeps_tilde() {
+    let contents = "\
+file_path = ~/Documents/timesheet.markdown
+start_time = true
+end_time = true
+duration = true
+duration_rounding = 10
+";
+    let config = parse_config(contents, None).unwrap();
+    assert_eq!(
+        config.destination,
+        Destination::TextFile("~/Documents/timesheet.markdown".to_string())
+    );
+}
+
+/// The shipped example config parses and expands `~` to the home directory.
+#[test]
+fn shipped_example_config_parses() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("md_timesheet.config.example");
+    let contents = std::fs::read_to_string(&path).unwrap();
+
+    let config = parse_config(&contents, Some("/home/me")).unwrap();
+
+    assert_eq!(
+        config.destination,
+        Destination::TextFile("/home/me/Documents/timesheet.markdown".to_string())
+    );
+    assert_eq!(
+        config.format,
+        RecordsFormat {
+            start_time: true,
+            end_time: true,
+            duration: true,
+            duration_rounding: 10,
+        }
+    );
 }

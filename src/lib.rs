@@ -86,8 +86,9 @@ impl Default for Config {
 ///
 /// Blank lines and lines starting with `#` are ignored. Every supported key is
 /// required; unknown keys and malformed or missing values produce a descriptive
-/// error rather than falling back to defaults.
-pub fn parse_config(contents: &str) -> Result<Config, String> {
+/// error rather than falling back to defaults. A leading `~/` in `file_path` is
+/// expanded to `home` (see [`expand_tilde`]).
+pub fn parse_config(contents: &str, home: Option<&str>) -> Result<Config, String> {
     let mut file_path: Option<String> = None;
     let mut start_time: Option<bool> = None;
     let mut end_time: Option<bool> = None;
@@ -109,7 +110,7 @@ pub fn parse_config(contents: &str) -> Result<Config, String> {
         let key = key.trim();
         let value = value.trim();
         match key {
-            "file_path" => file_path = Some(value.to_string()),
+            "file_path" => file_path = Some(expand_tilde(value, home)),
             "start_time" => start_time = Some(parse_bool(key, value, line_number)?),
             "end_time" => end_time = Some(parse_bool(key, value, line_number)?),
             "duration" => duration = Some(parse_bool(key, value, line_number)?),
@@ -167,7 +168,7 @@ pub fn serialize_config(config: &Config) -> Result<String, String> {
 
     Ok(format!(
         r#"# md_timesheet configuration.
-# Path to the timesheet markdown file (relative to the working directory).
+# Path to the timesheet markdown file (~/ expands to your home directory).
 file_path = {file_path}
 
 # Which table columns to include.
@@ -312,10 +313,30 @@ pub fn write_pointer(xdg_path: &Path, target: &Path) -> Result<(), String> {
 }
 
 /// Reads and parses the config file at `path`.
-pub fn load_config_from(path: &Path) -> Result<Config, String> {
+///
+/// `home` is used to expand a leading `~/` in `file_path`.
+pub fn load_config_from(path: &Path, home: Option<&str>) -> Result<Config, String> {
     let contents = fs::read_to_string(path)
         .map_err(|e| format!("Error reading config file '{}': {}", path.display(), e))?;
-    parse_config(&contents)
+    parse_config(&contents, home)
+}
+
+/// Expands a leading `~` or `~/` in `path` to the `home` directory.
+///
+/// Paths that do not start with `~`, and any path when `home` is missing or
+/// empty, are returned unchanged.
+pub fn expand_tilde(path: &str, home: Option<&str>) -> String {
+    let home = match home.filter(|value| !value.is_empty()) {
+        Some(home) => home,
+        None => return path.to_string(),
+    };
+    if path == "~" {
+        return home.to_string();
+    }
+    match path.strip_prefix("~/") {
+        Some(rest) => format!("{}/{}", home, rest),
+        None => path.to_string(),
+    }
 }
 
 /// Parses a boolean config value, naming the key and line on failure.

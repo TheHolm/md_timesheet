@@ -41,8 +41,9 @@ effort is made to support other platforms.
 ## Layout
 
 - `src/main.rs` - the GTK4/libadwaita GUI: window, entry field and the
-  "Start"/"Worked on" buttons. Deliberately thin; it only wires the widgets to
-  the library and handles I/O errors and exit codes.
+  "Start"/"Worked on" buttons, plus the first-run config creation dialog and
+  the settings window (gear button). Deliberately thin; it only wires the
+  widgets to the library and handles I/O errors and exit codes.
 - `src/lib.rs` - all non-GUI logic, exposed publicly so the GUI and the
   integration tests share exactly one implementation: the `Destination`,
   `RecordsFormat` and `Config` types, config parsing/serialisation and config

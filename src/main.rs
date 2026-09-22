@@ -17,7 +17,9 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 
 use adw::prelude::*;
-use adw::{Application, MessageDialog};
+use adw::{
+    ActionRow, Application, EntryRow, HeaderBar, MessageDialog, PreferencesGroup, PreferencesPage,
+};
 use clap::Parser;
 use gtk::gdk::Key;
 use gtk::gio::prelude::FileExt;
@@ -32,8 +34,9 @@ use chrono::prelude::*;
 
 use md_timesheet::{
     amend_last_entry, apply_start, apply_worked, cwd_config_path, default_config_contents,
-    last_entry_description, load_config_from, locate_config, read_document, write_config,
-    write_document, write_pointer, xdg_config_dir, Config,
+    last_entry_description, load_config_from, locate_config, read_document, serialize_config,
+    write_config, write_document, write_pointer, xdg_config_dir, Config, Destination,
+    RecordsFormat,
 };
 
 /// Command line options.
@@ -164,7 +167,8 @@ fn config() -> Config {
     let path = CONFIG_PATH
         .get()
         .expect("the configuration path must be resolved before use");
-    match load_config_from(path) {
+    let home = std::env::var("HOME").ok();
+    match load_config_from(path, home.as_deref()) {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -282,6 +286,118 @@ fn cancel_amend(entry: &gtk::Entry, status: &Label, amending: &Cell<bool>) {
     status.set_visible(false);
 }
 
+/// Shows the settings window for editing the configuration.
+///
+/// The current config is loaded into the rows; "Save" writes the values back to
+/// the resolved config file and closes the window. The next action reloads the
+/// config, so the new settings take effect immediately.
+fn show_settings(app: &Application, parent: &ApplicationWindow) {
+    let config = config();
+
+    let (path, start_time, end_time, duration, duration_rounding) = match &config.destination {
+        Destination::TextFile(path) => (
+            path.clone(),
+            config.format.start_time,
+            config.format.end_time,
+            config.format.duration,
+            config.format.duration_rounding,
+        ),
+        Destination::JoplinNote(_) => {
+            eprintln!("Error: Joplin destinations cannot be edited yet.");
+            return;
+        }
+    };
+
+    let window = gtk::Window::builder()
+        .application(app)
+        .transient_for(parent)
+        .modal(true)
+        .title("Settings")
+        .default_width(400)
+        .default_height(500)
+        .build();
+
+    let header = HeaderBar::new();
+    let save_button = Button::with_label("Save");
+    header.pack_end(&save_button);
+    window.set_titlebar(Some(&header));
+
+    let page = PreferencesPage::new();
+
+    let storage = PreferencesGroup::builder().title("Storage").build();
+    let path_row = EntryRow::builder()
+        .title("Timesheet file")
+        .text(path)
+        .build();
+    storage.add(&path_row);
+
+    let columns = PreferencesGroup::builder().title("Columns").build();
+    let (start_row, start_switch) = setting_switch("Start Time", start_time);
+    let (end_row, end_switch) = setting_switch("End Time", end_time);
+    let (duration_row, duration_switch) = setting_switch("Duration", duration);
+    columns.add(&start_row);
+    columns.add(&end_row);
+    columns.add(&duration_row);
+
+    let durations = PreferencesGroup::builder().title("Durations").build();
+    let rounding_spin = gtk::SpinButton::with_range(1.0, 1440.0, 1.0);
+    rounding_spin.set_value(duration_rounding as f64);
+    let rounding_row = ActionRow::builder().title("Round up to (minutes)").build();
+    rounding_row.add_suffix(&rounding_spin);
+    durations.add(&rounding_row);
+
+    page.add(&storage);
+    page.add(&columns);
+    page.add(&durations);
+
+    window.set_child(Some(&page));
+
+    save_button.connect_clicked({
+        let window = window.clone();
+        move |_| {
+            let new_config = Config {
+                destination: Destination::TextFile(path_row.text().to_string()),
+                format: RecordsFormat {
+                    start_time: start_switch.is_active(),
+                    end_time: end_switch.is_active(),
+                    duration: duration_switch.is_active(),
+                    duration_rounding: rounding_spin.value() as i32,
+                },
+            };
+
+            let contents = match serialize_config(&new_config) {
+                Ok(contents) => contents,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return;
+                }
+            };
+
+            let config_path = CONFIG_PATH
+                .get()
+                .expect("the configuration path must be resolved before use");
+            match write_config(config_path, &contents) {
+                Ok(()) => window.close(),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+    });
+
+    window.present();
+}
+
+/// Builds a titled settings row with a switch on the trailing side.
+fn setting_switch(title: &str, value: bool) -> (ActionRow, gtk::Switch) {
+    let switch = gtk::Switch::builder()
+        .active(value)
+        .valign(gtk::Align::Center)
+        .build();
+    let row = ActionRow::builder().title(title).build();
+    row.add_suffix(&switch);
+    row.set_activatable_widget(Some(&switch));
+    (row, switch)
+}
+
 /// Builds the application window and connects the buttons and shortcuts.
 ///
 /// The window is not presented; the caller presents it once a config file has
@@ -300,6 +416,16 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
     let status = Label::new(Some("Amending last entry (Esc to cancel)"));
     status.set_visible(false);
 
+    let settings_button = Button::builder()
+        .icon_name("emblem-system-symbolic")
+        .tooltip_text("Settings")
+        .build();
+    settings_button.connect_clicked({
+        let app = app.clone();
+        let window = window.clone();
+        move |_| show_settings(&app, &window)
+    });
+
     let vbox = Box::new(gtk::Orientation::Vertical, 5);
     let hbox = Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -315,6 +441,7 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
 
     hbox.append(&button_s);
     hbox.append(&button_w);
+    hbox.append(&settings_button);
 
     vbox.append(&status);
     vbox.append(&entry);

@@ -23,8 +23,8 @@ next launch.
 The file has the following keys, all of which are required:
 
 ```ini
-# Path to the timesheet markdown file (relative to the working directory).
-file_path = ./timesheet.markdown
+# Path to the timesheet markdown file (~/ expands to your home directory).
+file_path = ~/Documents/timesheet.markdown
 
 # Which table columns to include.
 start_time = true
@@ -35,7 +35,13 @@ duration = true
 duration_rounding = 10
 ```
 
-Lines starting with `#` and blank lines are ignored.
+Lines starting with `#` and blank lines are ignored. A copy of the above is
+provided as `md_timesheet.config.example`; copy it to one of the locations
+above and adjust the values.
+
+The settings can also be edited in the GUI: the gear button in the top-right
+corner of the window opens a settings window where the path, columns and
+rounding can be changed and saved back to the config file.
 
 # How to use
 
@@ -109,7 +115,6 @@ The GUI in `src/main.rs` is a thin wrapper and is not covered by the tests.
 
 * Proper error handling; a popup window needs to be displayed instead of writing to STDERR.
 * Reading and writing changes need to be asynchronous and not performed from the main loop.
-* Configuration is read from a file; it should also be editable via the GUI.
 * Check the last non-empty line for the timestamp instead of just the last line.
 * Joplin note support
 * Packaging for Debian/Ubuntu and possibly something else.

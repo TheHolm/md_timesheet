@@ -1,0 +1,17 @@
+# md_timesheet configuration example.
+#
+# Copy this file to one of the locations the program searches:
+#   - ./md_timesheet.config in the folder you run it from, or
+#   - $XDG_CONFIG_HOME/md_timesheet/config (~/.config/md_timesheet/config),
+# then adjust the values below.
+
+# Path to the timesheet markdown file (~/ expands to your home directory).
+file_path = ~/Documents/timesheet.markdown
+
+# Which table columns to include.
+start_time = true
+end_time = true
+duration = true
+
+# Round durations up to the next multiple of this many minutes.
+duration_rounding = 10
