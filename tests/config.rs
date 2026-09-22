@@ -3,9 +3,9 @@
 use std::path::Path;
 
 use md_timesheet::{
-    canonical_config_path, cwd_config_path, expand_tilde, load_config_from, locate_config,
-    parse_config, pointer_target, serialize_config, write_config, write_pointer, xdg_config_dir,
-    Config, Destination, RecordsFormat, RECORD_FORMAT,
+    canonical_config_path, collapse_tilde, cwd_config_path, expand_tilde, load_config_from,
+    locate_config, parse_config, pointer_target, serialize_config, write_config, write_pointer,
+    xdg_config_dir, Config, Destination, RecordsFormat, RECORD_FORMAT,
 };
 
 /// The built-in default configuration.
@@ -396,4 +396,48 @@ fn shipped_example_config_parses() {
             duration_rounding: 10,
         }
     );
+}
+
+/// A path at or below the home directory is collapsed back to `~`/`~/`.
+#[test]
+fn collapse_tilde_collapses_home() {
+    assert_eq!(collapse_tilde("/home/me", Some("/home/me")), "~");
+    assert_eq!(
+        collapse_tilde("/home/me/Documents/timesheet.markdown", Some("/home/me")),
+        "~/Documents/timesheet.markdown"
+    );
+}
+
+/// Paths outside the home directory are left unchanged.
+#[test]
+fn collapse_tilde_leaves_other_paths() {
+    assert_eq!(
+        collapse_tilde("/tmp/timesheet.markdown", Some("/home/me")),
+        "/tmp/timesheet.markdown"
+    );
+    assert_eq!(
+        collapse_tilde("./timesheet.markdown", Some("/home/me")),
+        "./timesheet.markdown"
+    );
+    assert_eq!(collapse_tilde("~/x", Some("/home/me")), "~/x");
+    assert_eq!(
+        collapse_tilde("/home/me-something/x", Some("/home/me")),
+        "/home/me-something/x"
+    );
+}
+
+/// Without a home directory, `collapse_tilde` changes nothing.
+#[test]
+fn collapse_tilde_without_home_is_unchanged() {
+    assert_eq!(collapse_tilde("/home/me/x", None), "/home/me/x");
+    assert_eq!(collapse_tilde("/home/me/x", Some("")), "/home/me/x");
+}
+
+/// Collapsing then expanding a home path round-trips.
+#[test]
+fn collapse_then_expand_roundtrip() {
+    let path = "/home/me/Documents/timesheet.markdown";
+    let collapsed = collapse_tilde(path, Some("/home/me"));
+    assert_eq!(collapsed, "~/Documents/timesheet.markdown");
+    assert_eq!(expand_tilde(&collapsed, Some("/home/me")), path);
 }

@@ -39,9 +39,10 @@ Lines starting with `#` and blank lines are ignored. A copy of the above is
 provided as `md_timesheet.config.example`; copy it to one of the locations
 above and adjust the values.
 
-The settings can also be edited in the GUI: the gear button in the top-right
-corner of the window opens a settings window where the path, columns and
-rounding can be changed and saved back to the config file.
+The settings can also be edited in the GUI: the gear button next to the
+Start/Worked on buttons opens a settings window where the path, columns and
+rounding can be changed and saved back to the config file. A timesheet path
+inside your home directory is saved back using `~/`.
 
 # How to use
 

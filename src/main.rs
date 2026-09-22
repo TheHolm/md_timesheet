@@ -33,10 +33,10 @@ use gtk4 as gtk;
 use chrono::prelude::*;
 
 use md_timesheet::{
-    amend_last_entry, apply_start, apply_worked, cwd_config_path, default_config_contents,
-    last_entry_description, load_config_from, locate_config, read_document, serialize_config,
-    write_config, write_document, write_pointer, xdg_config_dir, Config, Destination,
-    RecordsFormat,
+    amend_last_entry, apply_start, apply_worked, collapse_tilde, cwd_config_path,
+    default_config_contents, last_entry_description, load_config_from, locate_config,
+    read_document, serialize_config, write_config, write_document, write_pointer, xdg_config_dir,
+    Config, Destination, RecordsFormat,
 };
 
 /// Command line options.
@@ -355,8 +355,12 @@ fn show_settings(app: &Application, parent: &ApplicationWindow) {
     save_button.connect_clicked({
         let window = window.clone();
         move |_| {
+            let home = std::env::var("HOME").ok();
             let new_config = Config {
-                destination: Destination::TextFile(path_row.text().to_string()),
+                destination: Destination::TextFile(collapse_tilde(
+                    &path_row.text(),
+                    home.as_deref(),
+                )),
                 format: RecordsFormat {
                     start_time: start_switch.is_active(),
                     end_time: end_switch.is_active(),
@@ -427,11 +431,9 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
     });
 
     let vbox = Box::new(gtk::Orientation::Vertical, 5);
-    let hbox = Box::builder()
+    let button_box = Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(5)
-        .margin_start(5)
-        .margin_end(5)
         .homogeneous(true)
         .hexpand(true)
         .build();
@@ -439,9 +441,17 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
     let button_s = Button::with_label("Start");
     let button_w = Button::with_label("Worked on");
 
-    hbox.append(&button_s);
-    hbox.append(&button_w);
+    button_box.append(&button_s);
+    button_box.append(&button_w);
+
+    let hbox = Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(5)
+        .margin_start(5)
+        .margin_end(5)
+        .build();
     hbox.append(&settings_button);
+    hbox.append(&button_box);
 
     vbox.append(&status);
     vbox.append(&entry);

@@ -339,6 +339,26 @@ pub fn expand_tilde(path: &str, home: Option<&str>) -> String {
     }
 }
 
+/// Collapses a `home` prefix in `path` back to a leading `~`.
+///
+/// This is the inverse of [`expand_tilde`]: a path equal to `home` becomes `~`
+/// and a path below `home` becomes `~/...`. Other paths, and any path when
+/// `home` is missing or empty, are returned unchanged.
+pub fn collapse_tilde(path: &str, home: Option<&str>) -> String {
+    let home = match home.filter(|value| !value.is_empty()) {
+        Some(home) => home,
+        None => return path.to_string(),
+    };
+    if path == home {
+        return "~".to_string();
+    }
+    let prefix = format!("{}/", home);
+    match path.strip_prefix(&prefix) {
+        Some(rest) => format!("~/{}", rest),
+        None => path.to_string(),
+    }
+}
+
 /// Parses a boolean config value, naming the key and line on failure.
 fn parse_bool(key: &str, value: &str, line_number: usize) -> Result<bool, String> {
     match value {
