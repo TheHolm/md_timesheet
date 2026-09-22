@@ -53,13 +53,31 @@ cargo build --release
 ```
 Compiled executable will be in target/release/md_timesheet
 
+# Testing
+
+The non-GUI logic lives in a library crate (`src/lib.rs`) so it can be tested
+without a display. Run the test suite with:
+
+```
+cargo test
+```
+
+Line coverage is generated with [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov):
+
+```
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+cargo llvm-cov --tests
+```
+
+The GUI in `src/main.rs` is a thin wrapper and is not covered by the tests.
+
 # TODO
 
 * Proper error handling; a popup window needs to be displayed instead of writing to STDERR.
 * Reading and writing changes need to be asynchronous and not performed from the main loop.
 * Configuration should be done via the GUI (currently hardcoded).
 * Check the last non-empty line for the timestamp instead of just the last line.
-* Tests?
 * Joplin note support
 * Packaging for Debian/Ubuntu and possibly something else.
 * Improved formatting for the tables with all columns of the same width so that they are easily readable as text.
