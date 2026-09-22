@@ -72,6 +72,30 @@ fn write_empty_truncates() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
 }
 
+/// Reading a path that cannot be opened reports an error.
+#[test]
+fn read_unopenable_path_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir
+        .path()
+        .join("no-such-directory")
+        .join("timesheet.markdown");
+    let dest = Destination::TextFile(missing.to_str().unwrap().to_string());
+
+    assert!(read_document(&dest).is_err());
+}
+
+/// Reading a file whose bytes are not valid UTF-8 reports an error.
+#[test]
+fn read_invalid_utf8_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("timesheet.markdown");
+    std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+    let dest = Destination::TextFile(path.to_str().unwrap().to_string());
+
+    assert!(read_document(&dest).is_err());
+}
+
 /// Writing to a file that was never created or read reports an error.
 #[test]
 fn write_missing_file_errors() {
