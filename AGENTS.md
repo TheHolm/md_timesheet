@@ -128,3 +128,5 @@ cargo install cargo-llvm-cov --locked
   feature; `Z` (patch) is bumped for bugfixes and other changes that don't
   add, remove, or change functionality
 - Never commit changes unless the user explicitly asks to commit
+- Pushing to the upstream remote (`origin`), including tags, is done by the
+  user; prepare commits, merges and tags locally but never push
