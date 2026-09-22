@@ -2,12 +2,42 @@
 
 **!!! WORK IN PROGRESS !!!** ( but usable )
 
-This is a simple GTK4 program for creating timesheets formatted in Markdown. At present, only file storage is supported, and the file path is hardcoded as (./timesheet.markdown). Support for Joplin is in the pipeline.
+This is a simple GTK4 program for creating timesheets formatted in Markdown. At present, only file storage is supported, and the timesheet file is configured via a config file (see [Configuration](#configuration)). Support for Joplin is in the pipeline.
+
+# Configuration
+
+The program reads its settings from a small `key = value` config file. It looks
+for the file in this order and uses the first one it finds:
+
+1. the path passed with `-c` / `--config` (must exist);
+2. `./md_timesheet.config` in the current folder;
+3. `$XDG_CONFIG_HOME/md_timesheet/config`, falling back to
+   `$HOME/.config/md_timesheet/config`.
+
+If no config file is found the program exits with an error.
+
+The file has the following keys, all of which are required:
+
+```ini
+# Path to the timesheet markdown file (relative to the working directory).
+file_path = ./timesheet.markdown
+
+# Which table columns to include.
+start_time = true
+end_time = true
+duration = true
+
+# Round durations up to the next multiple of this many minutes.
+duration_rounding = 10
+```
+
+Lines starting with `#` and blank lines are ignored.
 
 # How to use
 
+* Create a config file (see above), for example `./md_timesheet.config`.
 * Configure the desktop environment to start the program on a keystroke.
-* Launch it for the first time and press the "Start" button. The program will create a *timesheet.markdown* file in the current directory, add a day header to it, and then terminate. (The program always terminates after any button is clicked; this is not a bug but a feature! :-) )
+* Launch it for the first time and press the "Start" button. The program will create the timesheet file configured via *file_path*, add a day header to it, and then terminate. (The program always terminates after any button is clicked; this is not a bug but a feature! :-) )
 * When you **finish** working on a task, start it again by entering the task description into the entry field and pressing "worked at". This will add an entry to the existing table and terminate. If you worked past midnight, the entry will be added to the previous day, and a new table for the current day will be created.
 * When you begin your day or return from a break, click "start" to begin.
 
@@ -76,7 +106,7 @@ The GUI in `src/main.rs` is a thin wrapper and is not covered by the tests.
 
 * Proper error handling; a popup window needs to be displayed instead of writing to STDERR.
 * Reading and writing changes need to be asynchronous and not performed from the main loop.
-* Configuration should be done via the GUI (currently hardcoded).
+* Configuration is read from a file; it should also be editable via the GUI.
 * Check the last non-empty line for the timestamp instead of just the last line.
 * Joplin note support
 * Packaging for Debian/Ubuntu and possibly something else.

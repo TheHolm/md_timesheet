@@ -1,4 +1,5 @@
 target
 .bash_history
 timesheet.markdown
+md_timesheet.config
 execute.sh

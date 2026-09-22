@@ -27,7 +27,7 @@ binary are all named `md_timesheet`. Version: declared as `version` in
 - `gtk4` (feature `v4_8`) - GUI toolkit
 - `adw` / libadwaita (feature `v1_2`) - GNOME application shell
 - `chrono` - date/time handling and duration maths
-- `once_cell` - the lazily-initialised storage destination
+- `clap` - command line argument parsing (the `-c`/`--config` option)
 - `reqwest` - reserved for the planned Joplin REST API support (currently unused)
 - `tempfile` (dev-dependency) - temporary directories/files for integration tests
 - Docker (Debian `bookworm` base) for building
@@ -44,8 +44,10 @@ effort is made to support other platforms.
   "Start"/"Worked on" buttons. Deliberately thin; it only wires the widgets to
   the library and handles I/O errors and exit codes.
 - `src/lib.rs` - all non-GUI logic, exposed publicly so the GUI and the
-  integration tests share exactly one implementation: the `Destination` and
-  `RecordsFormat` types, file reading/writing (`read_document`,
+  integration tests share exactly one implementation: the `Destination`,
+  `RecordsFormat` and `Config` types, config parsing/serialisation and config
+  file discovery (`parse_config`, `serialize_config`, `locate_config`,
+  `load_config_from`), file reading/writing (`read_document`,
   `write_document`), Markdown generation (`new_day`, `new_entry`), the pure
   state transitions (`apply_start`, `apply_worked`) and the default
   `RECORD_FORMAT`.
@@ -55,6 +57,8 @@ effort is made to support other platforms.
   - `document_io.rs` - creating, reading back and overwriting a timesheet file
   - `actions.rs` - `apply_start`/`apply_worked` across empty files, same-day
     and previous-day timestamps, midnight rollover and unparsable last lines
+  - `config.rs` - config parsing/serialisation, column handling and the config
+    file search order
 - `Cargo.toml` - package metadata, dependencies and the `tempfile`
   dev-dependency
 - `docker/Dockerfile` - build environment
@@ -85,8 +89,6 @@ Work in progress. Current known issues:
 - Errors are written to STDERR (and to STDOUT for an unparsable last line on
   "Start"); a popup would be better.
 - File reading/writing is synchronous and runs on the GTK main loop.
-- The storage path (`./timesheet.markdown`) and the record format are
-  hardcoded; configuration should move into the GUI.
 - `apply_*` only inspects the last line; the last *non-empty* line would be
   more robust.
 - Joplin note support is stubbed out (`Destination::JoplinNote` returns

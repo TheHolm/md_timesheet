@@ -8,6 +8,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 
 use chrono::prelude::*;
 use chrono::Duration;
@@ -20,6 +21,7 @@ const TIMESTAMP_FORMAT: &str = "%d/%m/%Y %H:%M";
 ///
 /// Joplin support is not implemented yet; the type exists so that
 /// [`Destination`] can carry the configuration once it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JoplinNote {
     /// The Joplin note identifier.
     pub id: String,
@@ -30,6 +32,7 @@ pub struct JoplinNote {
 }
 
 /// Which columns a table header and its rows contain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordsFormat {
     /// Include a "Start Time" column.
     pub start_time: bool,
@@ -42,6 +45,7 @@ pub struct RecordsFormat {
 }
 
 /// Where the timesheet document is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Destination {
     /// A Markdown file at the contained path.
     TextFile(String),
@@ -57,6 +61,215 @@ pub const RECORD_FORMAT: RecordsFormat = RecordsFormat {
     duration: true,
     duration_rounding: 10,
 };
+
+/// The application configuration loaded from a config file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Config {
+    /// Where the timesheet document is stored.
+    pub destination: Destination,
+    /// Which columns the tables contain and how durations are rounded.
+    pub format: RecordsFormat,
+}
+
+impl Default for Config {
+    /// The built-in configuration used when no values are configured: the
+    /// timesheet lives in `./timesheet.markdown` and [`RECORD_FORMAT`] applies.
+    fn default() -> Self {
+        Config {
+            destination: Destination::TextFile("./timesheet.markdown".to_string()),
+            format: RECORD_FORMAT,
+        }
+    }
+}
+
+/// Parses the contents of a `key = value` configuration file.
+///
+/// Blank lines and lines starting with `#` are ignored. Every supported key is
+/// required; unknown keys and malformed or missing values produce a descriptive
+/// error rather than falling back to defaults.
+pub fn parse_config(contents: &str) -> Result<Config, String> {
+    let mut file_path: Option<String> = None;
+    let mut start_time: Option<bool> = None;
+    let mut end_time: Option<bool> = None;
+    let mut duration: Option<bool> = None;
+    let mut duration_rounding: Option<i32> = None;
+
+    for (index, raw_line) in contents.lines().enumerate() {
+        let line_number = index + 1;
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, value) = line.split_once('=').ok_or_else(|| {
+            format!(
+                "Line {}: expected 'key = value', got '{}'",
+                line_number, raw_line
+            )
+        })?;
+        let key = key.trim();
+        let value = value.trim();
+        match key {
+            "file_path" => file_path = Some(value.to_string()),
+            "start_time" => start_time = Some(parse_bool(key, value, line_number)?),
+            "end_time" => end_time = Some(parse_bool(key, value, line_number)?),
+            "duration" => duration = Some(parse_bool(key, value, line_number)?),
+            "duration_rounding" => {
+                let parsed: i32 = value.parse().map_err(|_| {
+                    format!(
+                        "Line {}: '{}' must be an integer, got '{}'",
+                        line_number, key, value
+                    )
+                })?;
+                if parsed <= 0 {
+                    return Err(format!(
+                        "Line {}: '{}' must be positive, got {}",
+                        line_number, key, parsed
+                    ));
+                }
+                duration_rounding = Some(parsed);
+            }
+            _ => {
+                return Err(format!("Line {}: unknown key '{}'", line_number, key));
+            }
+        }
+    }
+
+    let file_path = file_path.ok_or_else(|| "Missing 'file_path' setting.".to_string())?;
+    let start_time = start_time.ok_or_else(|| "Missing 'start_time' setting.".to_string())?;
+    let end_time = end_time.ok_or_else(|| "Missing 'end_time' setting.".to_string())?;
+    let duration = duration.ok_or_else(|| "Missing 'duration' setting.".to_string())?;
+    let duration_rounding =
+        duration_rounding.ok_or_else(|| "Missing 'duration_rounding' setting.".to_string())?;
+
+    Ok(Config {
+        destination: Destination::TextFile(file_path),
+        format: RecordsFormat {
+            start_time,
+            end_time,
+            duration,
+            duration_rounding,
+        },
+    })
+}
+
+/// Serialises a configuration to the `key = value` text format.
+///
+/// This is the inverse of [`parse_config`], so `parse_config(&serialize_config(c))`
+/// yields `c`. Only a [`Destination::TextFile`] can be represented; a Joplin
+/// destination is rejected because Joplin support is not implemented.
+pub fn serialize_config(config: &Config) -> Result<String, String> {
+    let file_path = match &config.destination {
+        Destination::TextFile(path) => path,
+        Destination::JoplinNote(_) => {
+            return Err("Cannot serialise a Joplin destination to a config file.".to_string());
+        }
+    };
+
+    Ok(format!(
+        r#"# md_timesheet configuration.
+# Path to the timesheet markdown file (relative to the working directory).
+file_path = {file_path}
+
+# Which table columns to include.
+start_time = {}
+end_time = {}
+duration = {}
+
+# Round durations up to the next multiple of this many minutes.
+duration_rounding = {}
+"#,
+        config.format.start_time,
+        config.format.end_time,
+        config.format.duration,
+        config.format.duration_rounding
+    ))
+}
+
+/// Returns the default configuration serialised to the config file format.
+pub fn default_config_contents() -> String {
+    serialize_config(&Config::default()).expect("the default config is always serialisable")
+}
+
+/// Returns the `md_timesheet` directory inside the XDG config directory.
+///
+/// Uses `$XDG_CONFIG_HOME` when set and non-empty, otherwise `$HOME/.config`.
+/// Returns an error when neither is available.
+pub fn xdg_config_dir(
+    xdg_config_home: Option<&str>,
+    home: Option<&str>,
+) -> Result<PathBuf, String> {
+    if let Some(xdg) = xdg_config_home.filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(xdg).join("md_timesheet"));
+    }
+    match home.filter(|value| !value.is_empty()) {
+        Some(home) => Ok(PathBuf::from(home).join(".config").join("md_timesheet")),
+        None => Err("Neither $XDG_CONFIG_HOME nor $HOME is set.".to_string()),
+    }
+}
+
+/// Returns the canonical config file path inside the XDG config directory.
+pub fn canonical_config_path(
+    xdg_config_home: Option<&str>,
+    home: Option<&str>,
+) -> Result<PathBuf, String> {
+    Ok(xdg_config_dir(xdg_config_home, home)?.join("config"))
+}
+
+/// Returns the config file path inside the current folder.
+pub fn cwd_config_path(cwd: &Path) -> PathBuf {
+    cwd.join("md_timesheet.config")
+}
+
+/// Finds the config file to use, following the documented search order.
+///
+/// The path given by the `-c`/`--config` option wins and must exist. Otherwise
+/// the current folder (`./md_timesheet.config`) is checked, then the XDG config
+/// directory. Returns `Ok(None)` when no config file exists.
+pub fn locate_config(
+    cli_config: Option<&Path>,
+    cwd: &Path,
+    xdg_config_home: Option<&str>,
+    home: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    if let Some(path) = cli_config {
+        if path.is_file() {
+            return Ok(Some(path.to_path_buf()));
+        }
+        return Err(format!("Config file '{}' does not exist.", path.display()));
+    }
+
+    let cwd_path = cwd_config_path(cwd);
+    if cwd_path.is_file() {
+        return Ok(Some(cwd_path));
+    }
+
+    if let Ok(xdg_path) = canonical_config_path(xdg_config_home, home) {
+        if xdg_path.is_file() {
+            return Ok(Some(xdg_path));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Reads and parses the config file at `path`.
+pub fn load_config_from(path: &Path) -> Result<Config, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|e| format!("Error reading config file '{}': {}", path.display(), e))?;
+    parse_config(&contents)
+}
+
+/// Parses a boolean config value, naming the key and line on failure.
+fn parse_bool(key: &str, value: &str, line_number: usize) -> Result<bool, String> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(format!(
+            "Line {}: '{}' must be 'true' or 'false', got '{}'",
+            line_number, key, value
+        )),
+    }
+}
 
 /// Reads the whole document as a list of lines.
 ///
@@ -371,4 +584,24 @@ pub fn amend_last_entry(
     lines[last_index] = current_datetime.format(TIMESTAMP_FORMAT).to_string();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `parse_bool` accepts the two documented literals.
+    #[test]
+    fn parse_bool_accepts_true_and_false() {
+        assert!(parse_bool("start_time", "true", 1).unwrap());
+        assert!(!parse_bool("start_time", "false", 1).unwrap());
+    }
+
+    /// `parse_bool` rejects anything else and names the key.
+    #[test]
+    fn parse_bool_rejects_other_values() {
+        let error = parse_bool("start_time", "yes", 3).unwrap_err();
+        assert!(error.contains("start_time"));
+        assert!(error.contains("Line 3"));
+    }
 }
