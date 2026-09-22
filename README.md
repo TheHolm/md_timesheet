@@ -79,6 +79,14 @@ last line contains timestamp of last operation formated as  %d/%m/%Y %H:%M (exam
 * worked at - get last timestamp calculate duration add line to table add current timestamp to the end of document
 if last timestamp was yesterday, add "worked at" to last day and start new day.
 
+# Target platforms
+
+Generic Linux desktops with GTK4 and libadwaita are the supported target.
+Tagged releases also ship Debian/Ubuntu `.deb` packages and a FreeBSD `.pkg`,
+but FreeBSD is **best effort**: the binary is cross-compiled and packaged
+against FreeBSD 15 packages, but it is not run or validated on a real FreeBSD
+system, and that pipeline step is allowed to fail without blocking a release.
+
 # Compiling
 
 Needs Rust 1.78 or newer (the committed `Cargo.lock` uses lockfile format v4). The *docker* folder contains a *Dockerfile* that can be used to compile the project.

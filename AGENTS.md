@@ -28,15 +28,19 @@ binary are all named `md_timesheet`. Version: declared as `version` in
 - `adw` / libadwaita (feature `v1_2`) - GNOME application shell
 - `chrono` - date/time handling and duration maths
 - `clap` - command line argument parsing (the `-c`/`--config` option)
-- `reqwest` - reserved for the planned Joplin REST API support (currently unused)
+- `reqwest` - reserved for the planned Joplin REST API support (currently
+  unused); built with `default-features = false` so it pulls in no TLS stack
+  (Joplin's API is localhost HTTP)
 - `tempfile` (dev-dependency) - temporary directories/files for integration tests
 - Docker (Debian `bookworm` base) for building
 
 ## Target platforms
 
 Generic Linux desktops with GTK4 and libadwaita. The `docker/` folder holds a
-Dockerfile that provides a reproducible GTK4/libadwaita build environment. No
-effort is made to support other platforms.
+Dockerfile that provides a reproducible GTK4/libadwaita build environment.
+Tagged releases also build Debian/Ubuntu `.deb` packages and a FreeBSD `.pkg`;
+FreeBSD is best effort (cross-compiled and packaged, but never run or validated
+on a real FreeBSD system).
 
 ## Layout
 
@@ -63,6 +67,16 @@ effort is made to support other platforms.
 - `Cargo.toml` - package metadata, dependencies and the `tempfile`
   dev-dependency
 - `docker/Dockerfile` - build environment
+- `.woodpecker/release.yaml` - the Woodpecker CI workflow: on `v*` tags it
+  builds a Debian trixie `.deb`, an Ubuntu 26.04 `.deb` and a best-effort
+  FreeBSD `.pkg`, then publishes them to the GitHub mirror's Releases (needs a
+  `github_token` secret in Woodpecker; the FreeBSD step is `failure: ignore`)
+- `scripts/` - CI helpers: `build-freebsd-pkg.py` (writes a `.pkg` from a
+  staged install tree), `fetch-freebsd-gtk.py` (downloads the GTK4/libadwaita
+  FreeBSD cross sysroot from `pkg.freebsd.org`) and `extract-release-notes.sh`
+  (renders one release's section as a GitHub Release body)
+- `RELEASE_NOTES.md` - per-version release notes; the matching `## vX.Y.Z`
+  section is what a release publishes
 - `README.md` - user-facing usage, note format and TODO list
 - `LICENSE` - AGPL v3
 - `timesheet.markdown` - the user's own runtime timesheet (gitignored, not
@@ -96,7 +110,8 @@ Work in progress. Current known issues:
   "Joplin support has not been implemented."); `reqwest` is reserved for it.
 - Table columns are not padded to a common width, so the raw Markdown is not
   aligned as readable text.
-- No packaging for Debian/Ubuntu yet.
+- Packaging for Debian/Ubuntu and FreeBSD is done only for tagged releases via
+  `.woodpecker/release.yaml`; the FreeBSD package is best effort.
 
 ## Commands
 
@@ -105,6 +120,13 @@ Work in progress. Current known issues:
 - Test: `cargo test`
 - Coverage: `cargo llvm-cov --tests` (requires the `llvm-tools` component and
   the `cargo-llvm-cov` subcommand)
+- Debian package: `cargo deb` (requires the `cargo-deb` subcommand)
+- FreeBSD package: cross-build with `cargo build --release --target
+  x86_64-unknown-freebsd` against a FreeBSD sysroot, then
+  `python3 scripts/build-freebsd-pkg.py`
+- Release: pushing a `v*` tag runs `.woodpecker/release.yaml`, which builds and
+  publishes the packages (the tag needs a matching `## vX.Y.Z` entry in
+  `RELEASE_NOTES.md`)
 
 One-time coverage tooling setup:
 
@@ -124,6 +146,8 @@ cargo install cargo-llvm-cov --locked
 - Keep GUI code in `main.rs` and logic in `lib.rs`; anything testable belongs
   in the library
 - Commits include a detailed description of what changed and why
+- Add a `## vX.Y.Z` entry to `RELEASE_NOTES.md` for each release (the release
+  pipeline fails a tag with no matching entry rather than publish an empty one)
 - When starting work on each new branch, ask the user whether to bump the
   version number (and if so, to what value) before writing any code
 - Version numbers follow `X.Y.Z`: `X` (major) is bumped only when the user

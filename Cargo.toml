@@ -2,13 +2,20 @@
 name = "md_timesheet"
 version = "0.3.0"
 edition = "2021"
+description = "Keep your hours in a Markdown timesheet with a GTK4/libadwaita app"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 adw = { version = "0.7", package = "libadwaita", features = ["v1_2"] }
 gtk4 = { version = "0.9", package = "gtk4", features = ["v4_8"] }
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 chrono = { version = "0.4" }
 
 [dev-dependencies]
 tempfile = "3"
+
+[package.metadata.deb]
+maintainer = "TheHolm <theholm@github.com>"
+section = "utils"
+priority = "optional"
