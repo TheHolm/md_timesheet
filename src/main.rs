@@ -1,14 +1,20 @@
 //! GTK4/libadwaita front-end for `md_timesheet`.
 //!
 //! Deliberately thin: it wires the widgets to the library in [`lib.rs`](../lib.rs)
-//! and turns I/O results into process exit codes. The `Start`/`Worked on`
+//! and turns I/O results into process exit codes. The `Start`/`Worked for`
 //! actions always terminate the program, which is intentional.
+//!
+//! The "Worked for" button shows the rounded duration that would be recorded
+//! if it were pressed now (`--:--` when unknown or more than 24 hours). The
+//! timestamp is read once when the window is shown and the label is refreshed
+//! every [`REFRESH_SECONDS`] seconds.
 //!
 //! Keyboard shortcuts:
 //!
-//! - Enter is equivalent to the "Worked on" button.
+//! - Enter is equivalent to the "Worked for" button.
 //! - Arrow Up loads the last entry for amendment; while in that mode Enter
-//!   replaces the last entry and Escape returns to normal entry.
+//!   replaces the last entry and Escape returns to normal entry. In amend mode
+//!   the button shows the amended entry's new duration.
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -23,7 +29,7 @@ use adw::{
 use clap::Parser;
 use gtk::gdk::Key;
 use gtk::gio::prelude::FileExt;
-use gtk::glib::Propagation;
+use gtk::glib::{self, ControlFlow, Propagation};
 use gtk::{
     ApplicationWindow, Box, Button, Entry, EventControllerKey, FileChooserAction,
     FileChooserNative, Label, PropagationPhase, ResponseType,
@@ -33,11 +39,21 @@ use gtk4 as gtk;
 use chrono::prelude::*;
 
 use md_timesheet::{
-    amend_last_entry, apply_start, apply_worked, collapse_tilde, cwd_config_path,
-    default_config_contents, last_entry_description, load_config_from, locate_config,
-    read_document, serialize_config, write_config, write_document, write_pointer, xdg_config_dir,
-    Config, Destination, RecordsFormat,
+    amend_last_entry, apply_start, apply_worked, button_label, collapse_tilde, cwd_config_path,
+    default_config_contents, last_entry_description, last_entry_start, last_timestamp,
+    load_config_from, locate_config, peek_document, pending_duration, read_document,
+    serialize_config, write_config, write_document, write_pointer, xdg_config_dir, Config,
+    Destination, RecordsFormat,
 };
+
+/// The application ID used for D-Bus registration and desktop integration.
+const APP_ID: &str = "io.github.TheHolm.md_timesheet";
+
+/// The main window title.
+const WINDOW_TITLE: &str = "MD Timesheet";
+
+/// How often, in seconds, the "Worked for" label is recomputed.
+const REFRESH_SECONDS: u32 = 30;
 
 /// Command line options.
 #[derive(Parser)]
@@ -240,7 +256,73 @@ fn record_amend(description: String) {
     write_lines(lines);
 }
 
-/// Handles the "Worked on" button or Enter in normal mode.
+/// Loads the configuration without exiting on failure.
+///
+/// Used by the label preview, which must never terminate the program; returns
+/// `None` when the config path is unresolved or the file cannot be loaded.
+fn try_config() -> Option<Config> {
+    let path = CONFIG_PATH.get()?;
+    let home = std::env::var("HOME").ok();
+    load_config_from(path, home.as_deref()).ok()
+}
+
+/// State behind the duration shown on the "Worked for" button.
+///
+/// Cheap to clone: every field is a reference-counted handle shared by the
+/// window, the key handler and the refresh timer.
+#[derive(Clone)]
+struct Preview {
+    /// The "Worked for" button whose label is kept up to date.
+    button: Button,
+    /// The timestamp on the document's last line, read when the window is shown.
+    last: Rc<Cell<Option<NaiveDateTime>>>,
+    /// When the last entry started, set on entering amend mode.
+    amend_start: Rc<Cell<Option<NaiveDateTime>>>,
+    /// Whether the entry field is in amend mode.
+    amending: Rc<Cell<bool>>,
+}
+
+impl Preview {
+    /// Creates the preview state for `button`, outside amend mode and with no
+    /// known timestamp yet.
+    fn new(button: Button) -> Self {
+        Preview {
+            button,
+            last: Rc::new(Cell::new(None)),
+            amend_start: Rc::new(Cell::new(None)),
+            amending: Rc::new(Cell::new(false)),
+        }
+    }
+
+    /// Re-reads the last timestamp from the document and refreshes the label.
+    ///
+    /// The document is only peeked at: a missing timesheet is not created, and
+    /// any read or config error simply results in `--:--`.
+    fn reload(&self) {
+        let lines = try_config()
+            .and_then(|config| peek_document(&config.destination).ok())
+            .unwrap_or_default();
+        self.last.set(last_timestamp(&lines));
+        self.refresh();
+    }
+
+    /// Recomputes the label from the cached start point and the current time.
+    ///
+    /// In amend mode the duration runs from the last entry's start, otherwise
+    /// from the document's last timestamp.
+    fn refresh(&self) {
+        let since = if self.amending.get() {
+            self.amend_start.get()
+        } else {
+            self.last.get()
+        };
+        let pending = try_config()
+            .and_then(|config| pending_duration(since, Local::now().naive_local(), &config.format));
+        self.button.set_label(&button_label(pending.as_deref()));
+    }
+}
+
+/// Handles the "Worked for" button or Enter.
 ///
 /// Does nothing when the entry field is empty.
 fn submit(entry: &gtk::Entry, amending: bool) {
@@ -257,17 +339,24 @@ fn submit(entry: &gtk::Entry, amending: bool) {
 
 /// Fills the entry with the last entry's description and enters amend mode.
 ///
-/// Returns whether amend mode was entered. Nothing happens when the document
-/// has no entry or cannot be read.
-fn start_amend(entry: &gtk::Entry, status: &Label, amending: &Cell<bool>) -> bool {
+/// Also records when the last entry started so the button shows the amended
+/// duration (`--:--` when that start cannot be determined, e.g. without a
+/// Start Time column). Returns whether amend mode was entered. Nothing happens
+/// when the document has no entry or cannot be read.
+fn start_amend(entry: &gtk::Entry, status: &Label, preview: &Preview) -> bool {
     let config = config();
     match read_document(&config.destination) {
         Ok(lines) => match last_entry_description(&lines) {
             Some(description) => {
                 entry.set_text(&description);
                 entry.set_position(-1);
-                amending.set(true);
+                let now = Local::now().naive_local();
+                preview
+                    .amend_start
+                    .set(last_entry_start(&lines, now, &config.format).ok());
+                preview.amending.set(true);
                 status.set_visible(true);
+                preview.refresh();
                 true
             }
             None => false,
@@ -279,19 +368,22 @@ fn start_amend(entry: &gtk::Entry, status: &Label, amending: &Cell<bool>) -> boo
     }
 }
 
-/// Leaves amend mode and clears the entry field.
-fn cancel_amend(entry: &gtk::Entry, status: &Label, amending: &Cell<bool>) {
+/// Leaves amend mode, clears the entry field and restores the normal label.
+fn cancel_amend(entry: &gtk::Entry, status: &Label, preview: &Preview) {
     entry.set_text("");
-    amending.set(false);
+    preview.amending.set(false);
+    preview.amend_start.set(None);
     status.set_visible(false);
+    preview.refresh();
 }
 
 /// Shows the settings window for editing the configuration.
 ///
 /// The current config is loaded into the rows; "Save" writes the values back to
-/// the resolved config file and closes the window. The next action reloads the
-/// config, so the new settings take effect immediately.
-fn show_settings(app: &Application, parent: &ApplicationWindow) {
+/// the resolved config file, refreshes the "Worked for" label (the rounding may
+/// have changed) and closes the window. The next action reloads the config, so
+/// the new settings take effect immediately.
+fn show_settings(app: &Application, parent: &ApplicationWindow, preview: &Preview) {
     let config = config();
 
     let (path, start_time, end_time, duration, duration_rounding) = match &config.destination {
@@ -354,6 +446,7 @@ fn show_settings(app: &Application, parent: &ApplicationWindow) {
 
     save_button.connect_clicked({
         let window = window.clone();
+        let preview = preview.clone();
         move |_| {
             let home = std::env::var("HOME").ok();
             let new_config = Config {
@@ -381,7 +474,10 @@ fn show_settings(app: &Application, parent: &ApplicationWindow) {
                 .get()
                 .expect("the configuration path must be resolved before use");
             match write_config(config_path, &contents) {
-                Ok(()) => window.close(),
+                Ok(()) => {
+                    preview.refresh();
+                    window.close();
+                }
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
@@ -405,13 +501,14 @@ fn setting_switch(title: &str, value: bool) -> (ActionRow, gtk::Switch) {
 /// Builds the application window and connects the buttons and shortcuts.
 ///
 /// The window is not presented; the caller presents it once a config file has
-/// been resolved.
+/// been resolved. Each time it is shown, the last timestamp is re-read for the
+/// "Worked for" label, which is then refreshed every [`REFRESH_SECONDS`].
 fn build_main_window(app: &Application) -> ApplicationWindow {
     let window = ApplicationWindow::builder()
         .application(app)
         .default_width(320)
         .default_height(120)
-        .title("Enter Text")
+        .title(WINDOW_TITLE)
         .build();
 
     let entry_buffer = gtk::EntryBuffer::builder().build();
@@ -419,6 +516,10 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
 
     let status = Label::new(Some("Amending last entry (Esc to cancel)"));
     status.set_visible(false);
+
+    let button_s = Button::with_label("Start");
+    let button_w = Button::with_label(&button_label(None));
+    let preview = Preview::new(button_w.clone());
 
     let settings_button = Button::builder()
         .icon_name("emblem-system-symbolic")
@@ -430,7 +531,8 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
     settings_button.connect_clicked({
         let app = app.clone();
         let window = window.clone();
-        move |_| show_settings(&app, &window)
+        let preview = preview.clone();
+        move |_| show_settings(&app, &window, &preview)
     });
 
     let vbox = Box::new(gtk::Orientation::Vertical, 5);
@@ -440,9 +542,6 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
         .homogeneous(true)
         .hexpand(true)
         .build();
-
-    let button_s = Button::with_label("Start");
-    let button_w = Button::with_label("Worked on");
 
     button_box.append(&button_s);
     button_box.append(&button_w);
@@ -462,18 +561,29 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
 
     window.set_child(Some(&vbox));
 
-    let amending = Rc::new(Cell::new(false));
+    window.connect_map({
+        let preview = preview.clone();
+        move |_| preview.reload()
+    });
+    glib::timeout_add_seconds_local(REFRESH_SECONDS, {
+        let preview = preview.clone();
+        move || {
+            preview.refresh();
+            ControlFlow::Continue
+        }
+    });
 
     button_s.connect_clicked(move |_| click_start());
     button_w.connect_clicked({
         let entry = entry.clone();
-        move |_| submit(&entry, false)
+        let preview = preview.clone();
+        move |_| submit(&entry, preview.amending.get())
     });
 
     entry.connect_activate({
         let entry = entry.clone();
-        let amending = amending.clone();
-        move |_| submit(&entry, amending.get())
+        let preview = preview.clone();
+        move |_| submit(&entry, preview.amending.get())
     });
 
     let key_controller = EventControllerKey::new();
@@ -481,18 +591,18 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
     key_controller.connect_key_pressed({
         let entry = entry.clone();
         let status = status.clone();
-        let amending = amending.clone();
+        let preview = preview.clone();
         move |_, key, _, _| match key {
             Key::Up => {
-                if amending.get() || !start_amend(&entry, &status, &amending) {
+                if preview.amending.get() || !start_amend(&entry, &status, &preview) {
                     Propagation::Proceed
                 } else {
                     Propagation::Stop
                 }
             }
             Key::Escape => {
-                if amending.get() {
-                    cancel_amend(&entry, &status, &amending);
+                if preview.amending.get() {
+                    cancel_amend(&entry, &status, &preview);
                     Propagation::Stop
                 } else {
                     Propagation::Proceed
@@ -513,9 +623,7 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
 fn main() {
     let cli = Cli::parse();
 
-    let app = Application::builder()
-        .application_id("com.example.textpopup")
-        .build();
+    let app = Application::builder().application_id(APP_ID).build();
 
     app.connect_activate(move |app| {
         let window = build_main_window(app);

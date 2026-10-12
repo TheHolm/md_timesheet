@@ -3,7 +3,7 @@
 //! Everything that can be exercised without a GTK main loop lives here: the
 //! storage destinations, the Markdown records format, file I/O, Markdown
 //! generation and the pure state transitions used by the "Start" and
-//! "Worked on" buttons. Keeping this out of `main.rs` lets the GUI and the
+//! "Worked for" buttons, including the duration preview shown on the latter. Keeping this out of `main.rs` lets the GUI and the
 //! integration tests share exactly one implementation.
 
 use std::fs::{self, OpenOptions};
@@ -408,6 +408,19 @@ pub fn read_document(dest: &Destination) -> Result<Vec<String>, String> {
     }
 }
 
+/// Reads the whole document as a list of lines without creating it.
+///
+/// Unlike [`read_document`], a missing [`Destination::TextFile`] yields an
+/// empty vector and is left uncreated, so merely previewing the document (for
+/// the "Worked for" label) has no side effects on disk.
+/// [`Destination::JoplinNote`] is not implemented and always errors.
+pub fn peek_document(dest: &Destination) -> Result<Vec<String>, String> {
+    match dest {
+        Destination::TextFile(file_path) if !Path::new(file_path).exists() => Ok(Vec::new()),
+        _ => read_document(dest),
+    }
+}
+
 /// Overwrites the document with `lines`, one line per element.
 ///
 /// For [`Destination::TextFile`] the file is truncated first.
@@ -465,6 +478,69 @@ pub fn new_day(date: &NaiveDateTime, format: &RecordsFormat) -> Vec<String> {
     day_header
 }
 
+/// Rounds `minutes` up to the next multiple of `rounding`.
+///
+/// Exact multiples (including 0) are left unchanged. This is the rounding
+/// applied to the "Duration" column, shared with the button preview so the two
+/// can never disagree.
+pub fn round_up_minutes(minutes: i64, rounding: i32) -> i64 {
+    let rounding = rounding as i64;
+    (minutes / rounding) * rounding + if minutes % rounding > 0 { rounding } else { 0 }
+}
+
+/// Formats a number of minutes as zero-padded `HH:MM`.
+///
+/// Hours are not wrapped at 24, so 1500 minutes is `25:00`.
+pub fn format_hhmm(minutes: i64) -> String {
+    format!("{:02}:{:02}", minutes / 60, minutes % 60)
+}
+
+/// The longest gap, in minutes, for which [`pending_duration`] still reports
+/// a value (24 hours).
+pub const MAX_PENDING_MINUTES: i64 = 24 * 60;
+
+/// Returns the timestamp of the last operation stored on the final line.
+///
+/// Uses the same rule as [`apply_start`]/[`apply_worked`]: only the very last
+/// line is inspected. Returns `None` for an empty document or an unparsable
+/// final line.
+pub fn last_timestamp(lines: &[String]) -> Option<NaiveDateTime> {
+    let last_line = lines.last()?;
+    NaiveDateTime::parse_from_str(last_line, TIMESTAMP_FORMAT).ok()
+}
+
+/// Computes the rounded duration that would be recorded for a task running
+/// from `since` until `now`, formatted as `HH:MM`.
+///
+/// Returns `None` when there is no starting point, when `since` is in the
+/// future (clock skew), or when more than [`MAX_PENDING_MINUTES`] have passed;
+/// a gap of exactly 24 hours is still reported.
+pub fn pending_duration(
+    since: Option<NaiveDateTime>,
+    now: NaiveDateTime,
+    format: &RecordsFormat,
+) -> Option<String> {
+    let since = since?;
+    if since > now {
+        return None;
+    }
+    let minutes = now.signed_duration_since(since).num_minutes();
+    if minutes > MAX_PENDING_MINUTES {
+        return None;
+    }
+    Some(format_hhmm(round_up_minutes(
+        minutes,
+        format.duration_rounding,
+    )))
+}
+
+/// Builds the "Worked for" button label from a [`pending_duration`] result.
+///
+/// `None` is shown as `--:--`.
+pub fn button_label(pending: Option<&str>) -> String {
+    format!("Worked for ({})", pending.unwrap_or("--:--"))
+}
+
 /// Builds the single table row describing a completed task.
 ///
 /// The duration is rounded up to the next multiple of
@@ -478,14 +554,10 @@ pub fn new_entry(
     let time_format = "%H:%M";
     let mut day_header: Vec<String> = Vec::new();
 
-    let duration: i64 = end_date.signed_duration_since(*start_date).num_minutes();
-    let duration: i64 = (duration / format.duration_rounding as i64)
-        * format.duration_rounding as i64
-        + if duration % (format.duration_rounding as i64) > 0 {
-            format.duration_rounding as i64
-        } else {
-            0
-        };
+    let duration: i64 = round_up_minutes(
+        end_date.signed_duration_since(*start_date).num_minutes(),
+        format.duration_rounding,
+    );
 
     let mut columns: Vec<String> = Vec::new();
     columns.push(description);
@@ -496,7 +568,7 @@ pub fn new_entry(
         columns.push(end_date.format(time_format).to_string());
     }
     if format.duration {
-        columns.push(format!("{:02}:{:02}", duration / 60, duration % 60));
+        columns.push(format_hhmm(duration));
     }
 
     day_header.push(format!("| {} |", columns.join(" | ")));
@@ -637,13 +709,45 @@ pub fn last_entry_description(lines: &[String]) -> Option<String> {
     first_cell(&lines[index]).map(|cell| cell.to_string())
 }
 
+/// Returns when the last entry started, as used by [`amend_last_entry`].
+///
+/// The stored `HH:MM` start time is placed on `current_datetime`'s date; when
+/// that would be later than `current_datetime` (the entry actually started
+/// before midnight) it is moved back one day.
+///
+/// Requires the format to include the "Start Time" column. Returns `Err` when
+/// there is no entry, the start time cannot be parsed, or the final line is
+/// not a valid timestamp - exactly the cases in which amending would fail.
+pub fn last_entry_start(
+    lines: &[String],
+    current_datetime: NaiveDateTime,
+    format: &RecordsFormat,
+) -> Result<NaiveDateTime, String> {
+    if !format.start_time {
+        return Err("Cannot amend without a Start Time column.".to_string());
+    }
+
+    let index = last_entry_index(lines).ok_or_else(|| "There is no entry to amend.".to_string())?;
+
+    let start_time = entry_start_time(&lines[index])
+        .ok_or_else(|| "The last entry has no parsable start time.".to_string())?;
+
+    if last_timestamp(lines).is_none() {
+        return Err("The last line is not a valid timestamp.".to_string());
+    }
+
+    let mut start_datetime = current_datetime.date().and_time(start_time);
+    if start_datetime > current_datetime {
+        start_datetime -= Duration::days(1);
+    }
+    Ok(start_datetime)
+}
+
 /// Applies the "amend last entry" action to `lines` in place.
 ///
-/// The last entry row keeps its start time but gets the new `description`, an
-/// end time of `current_datetime` and a recomputed duration; the trailing
-/// timestamp is then updated. When the stored start time is later than
-/// `current_datetime` (the entry actually started before midnight) the start is
-/// moved back one day.
+/// The last entry row keeps its start time (see [`last_entry_start`]) but gets
+/// the new `description`, an end time of `current_datetime` and a recomputed
+/// duration; the trailing timestamp is then updated.
 ///
 /// Requires the format to include the "Start Time" column. Returns `Err`,
 /// leaving `lines` unchanged, when there is no entry, the start time cannot be
@@ -654,26 +758,8 @@ pub fn amend_last_entry(
     current_datetime: NaiveDateTime,
     format: &RecordsFormat,
 ) -> Result<(), String> {
-    if !format.start_time {
-        return Err("Cannot amend without a Start Time column.".to_string());
-    }
-
+    let start_datetime = last_entry_start(lines, current_datetime, format)?;
     let index = last_entry_index(lines).ok_or_else(|| "There is no entry to amend.".to_string())?;
-
-    let start_time = entry_start_time(&lines[index])
-        .ok_or_else(|| "The last entry has no parsable start time.".to_string())?;
-
-    let last_line = lines
-        .last()
-        .ok_or_else(|| "There is no entry to amend.".to_string())?;
-    if NaiveDateTime::parse_from_str(last_line, TIMESTAMP_FORMAT).is_err() {
-        return Err("The last line is not a valid timestamp.".to_string());
-    }
-
-    let mut start_datetime = current_datetime.date().and_time(start_time);
-    if start_datetime > current_datetime {
-        start_datetime -= Duration::days(1);
-    }
 
     let mut row = new_entry(description, &start_datetime, &current_datetime, format);
     lines[index] = row
