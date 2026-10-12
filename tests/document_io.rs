@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use md_timesheet::{read_document, write_document, Destination, JoplinNote};
+use md_timesheet::{peek_document, read_document, write_document, Destination, JoplinNote};
 
 /// Builds a `TextFile` destination pointing at `timesheet.markdown` in `dir`.
 fn text_file(dir: &Path) -> (Destination, PathBuf) {
@@ -116,4 +116,29 @@ fn joplin_is_not_implemented() {
 
     assert!(read_document(&dest).is_err());
     assert!(write_document(&dest, Vec::new()).is_err());
+    assert!(peek_document(&dest).is_err());
+}
+
+/// Peeking at a missing file yields no lines and does not create it.
+#[test]
+fn peek_missing_file_does_not_create_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (dest, path) = text_file(dir.path());
+
+    assert!(peek_document(&dest).unwrap().is_empty());
+    assert!(!path.exists());
+}
+
+/// Peeking at an existing file returns its lines verbatim.
+#[test]
+fn peek_existing_file_reads_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let (dest, _path) = existing_file(dir.path());
+    let lines = vec![
+        "| Task | 09:00 |".to_string(),
+        "01/01/2025 10:00".to_string(),
+    ];
+    write_document(&dest, lines.clone()).unwrap();
+
+    assert_eq!(peek_document(&dest).unwrap(), lines);
 }
