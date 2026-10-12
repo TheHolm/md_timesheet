@@ -40,7 +40,7 @@ provided as `md_timesheet.config.example`; copy it to one of the locations
 above and adjust the values.
 
 The settings can also be edited in the GUI: the gear button next to the
-Start/Worked on buttons opens a settings window where the path, columns and
+Start/Worked for buttons opens a settings window where the path, columns and
 rounding can be changed and saved back to the config file. A timesheet path
 inside your home directory is saved back using `~/`.
 
@@ -48,7 +48,7 @@ inside your home directory is saved back using `~/`.
 
 * On the first launch, let the program create a config file (or create one yourself, see above), then configure the desktop environment to start the program on a keystroke.
 * Launch it for the first time and press the "Start" button. The program will create the timesheet file configured via *file_path*, add a day header to it, and then terminate. (The program always terminates after any button is clicked; this is not a bug but a feature! :-) )
-* When you **finish** working on a task, start it again by entering the task description into the entry field and pressing "worked at". This will add an entry to the existing table and terminate. If you worked past midnight, the entry will be added to the previous day, and a new table for the current day will be created.
+* When you **finish** working on a task, enter the task description into the entry field and press "Worked for" (or Enter). This will add an entry to the existing table and terminate. The button shows the time that will be recorded, e.g. "Worked for (01:20)". If you worked past midnight, the entry will be added to the previous day, and a new table for the current day will be created.
 * When you begin your day or return from a break, click "start" to begin.
 
 Important: **Never remove the timestamp on the last line**
@@ -71,13 +71,28 @@ last line contains timestamp of last operation formated as  %d/%m/%Y %H:%M (exam
 
 # GUI Buttons  
 "Start" - Begin time tracking; the text field is ignored.  
-"Worked on" - The task you completed. The text field is added to the description column.  
+"Worked for (HH:MM)" - The task you completed. The text field is added to the description column.  
+
+The time in brackets is the duration that would be recorded if you pressed the
+button now: the time since the last timestamp, rounded up the same way as the
+Duration column. It refreshes every 30 seconds while the window is open. It
+shows `(--:--)` when the last timestamp is more than 24 hours ago, is in the
+future, or there is no usable timestamp yet (empty file or unparsable last
+line).
+
+# Keyboard shortcuts
+
+* Enter - same as "Worked for".
+* Arrow Up - load the last entry for amendment. Enter then replaces it (it
+  keeps its start time and ends now) and Escape cancels. While amending, the
+  button shows the amended entry's new duration, from its start time until now
+  (`--:--` if the Start Time column is disabled).
 
 # button actions
 
 * start - if last timestamp was yesterday, start new day and update last timestamp, else just update timestamp
-* worked at - get last timestamp calculate duration add line to table add current timestamp to the end of document
-if last timestamp was yesterday, add "worked at" to last day and start new day.
+* worked for - get last timestamp calculate duration add line to table add current timestamp to the end of document
+if last timestamp was yesterday, add "worked for" to last day and start new day.
 
 # Target platforms
 

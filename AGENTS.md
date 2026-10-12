@@ -16,8 +16,11 @@ asks to commit" rule below, which exists partly for this reason.
 
 `md_timesheet` is a small GTK4/libadwaita desktop application for keeping a
 timesheet formatted as Markdown. The user types a task description, then
-presses "Start" (begin tracking) or "Worked on" (record the completed task),
-and the program updates the timesheet file and exits. The package, library and
+presses "Start" (begin tracking) or "Worked for (HH:MM)" (record the
+completed task; the bracketed time previews the duration that will be
+recorded), and the program updates the timesheet file and exits. The window
+title is "MD Timesheet" and the application ID is
+`io.github.TheHolm.md_timesheet`. The package, library and
 binary are all named `md_timesheet`. Version: declared as `version` in
 `Cargo.toml`.
 
@@ -45,23 +48,35 @@ on a real FreeBSD system).
 ## Layout
 
 - `src/main.rs` - the GTK4/libadwaita GUI: window, entry field and the
-  "Start"/"Worked on" buttons, plus the first-run config creation dialog and
-  the settings window (gear button). Deliberately thin; it only wires the
-  widgets to the library and handles I/O errors and exit codes.
+  "Start"/"Worked for" buttons, plus the first-run config creation dialog and
+  the settings window (gear button). The `Preview` struct keeps the "Worked
+  for (HH:MM)" label current: it peeks at the last timestamp when the window
+  is shown and refreshes every 30 seconds (in amend mode it counts from the
+  last entry's start). Deliberately thin; it only wires the widgets to the
+  library and handles I/O errors and exit codes.
 - `src/lib.rs` - all non-GUI logic, exposed publicly so the GUI and the
   integration tests share exactly one implementation: the `Destination`,
   `RecordsFormat` and `Config` types, config parsing/serialisation and config
   file discovery (`parse_config`, `serialize_config`, `locate_config`,
   `load_config_from`), file reading/writing (`read_document`,
-  `write_document`), Markdown generation (`new_day`, `new_entry`), the pure
-  state transitions (`apply_start`, `apply_worked`) and the default
-  `RECORD_FORMAT`.
+  `peek_document`, `write_document`), Markdown generation (`new_day`,
+  `new_entry`, `round_up_minutes`, `format_hhmm`), the pure state transitions
+  (`apply_start`, `apply_worked`, `amend_last_entry`), the duration preview
+  (`last_timestamp`, `last_entry_start`, `pending_duration`, `button_label`)
+  and the default `RECORD_FORMAT`.
 - `tests/` - integration tests split by topic:
   - `formatting.rs` - `new_day`/`new_entry` column selection and duration
     rounding
-  - `document_io.rs` - creating, reading back and overwriting a timesheet file
+  - `document_io.rs` - creating, reading back, peeking at and overwriting a
+    timesheet file
   - `actions.rs` - `apply_start`/`apply_worked` across empty files, same-day
     and previous-day timestamps, midnight rollover and unparsable last lines
+  - `amend.rs` - `last_entry_description`/`amend_last_entry`, including
+    midnight rollover and the error cases
+  - `elapsed.rs` - the "Worked for (HH:MM)" preview: rounding/formatting
+    helpers, `last_timestamp`, `last_entry_start`, `pending_duration` (24-hour
+    limit, clock skew) and `button_label`, and that the preview matches what
+    is then written
   - `config.rs` - config parsing/serialisation, column handling and the config
     file search order
 - `Cargo.toml` - package metadata, dependencies and the `tempfile`

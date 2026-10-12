@@ -6,6 +6,41 @@ changes** summary (what also appears in the GitHub Release body) and a
 added at the top. `scripts/extract-release-notes.sh` prints just one release's
 section for the GitHub Release body.
 
+## v0.4.0 — Duration preview on the "Worked for" button
+
+### User-facing changes
+
+- The "Worked on" button is now **"Worked for (HH:MM)"**. The time in
+  brackets is how much time would be recorded if you pressed it now, rounded
+  up exactly as the Duration column will be. It updates every 30 seconds
+  while the window is open.
+- It shows `(--:--)` when the last timestamp is more than 24 hours old, is in
+  the future, or when there is no usable timestamp yet.
+- In amend mode (Arrow Up) the button shows the amended entry's new duration,
+  from that entry's start time until now.
+- The window title is now "MD Timesheet" instead of "Enter Text".
+- The application ID changed from the placeholder `com.example.textpopup` to
+  `io.github.TheHolm.md_timesheet`. Desktop rules or settings tied to the old
+  ID (e.g. window rules for your launch shortcut) need to be set up again.
+
+### Details
+
+- `src/lib.rs`: added `round_up_minutes` and `format_hhmm` (now also used by
+  `new_entry`, so the preview and the written row share one implementation),
+  `last_timestamp`, `pending_duration` (with `MAX_PENDING_MINUTES` = 24h),
+  `button_label`, and `peek_document`, which reads the timesheet without
+  creating it so opening the window has no side effects on disk.
+- `last_entry_start` was split out of `amend_last_entry`, which now uses it;
+  the amend preview and the amended row therefore use the same start time and
+  midnight rule.
+- `src/main.rs`: a `Preview` struct holds the button and the cached start
+  points. The timestamp is re-read on the window's `map` signal (covering the
+  first-run onboarding path) and a `glib::timeout_add_seconds_local` timer
+  refreshes the label. Saving settings refreshes it too, since the rounding
+  may have changed.
+- Added `tests/elapsed.rs` and `peek_document` tests in
+  `tests/document_io.rs`.
+
 ## v0.3.1 — Prebuilt packages for every release
 
 ### User-facing changes
