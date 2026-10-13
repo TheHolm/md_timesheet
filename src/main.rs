@@ -4,6 +4,14 @@
 //! and turns I/O results into process exit codes. The `Start`/`Worked for`
 //! actions always terminate the program, which is intentional.
 //!
+//! All file I/O runs on `gio`'s I/O thread pool (via `gio::spawn_blocking`),
+//! not on the GTK main loop. The "Start"/"Worked for"/amend-submit actions
+//! end by exiting the process, which works from any thread, so their
+//! background task needs no further synchronisation; actions that then
+//! update widgets (the amend lookup below, and the preview reload) instead
+//! await that background task from a `glib::spawn_future_local` block, so
+//! the widget updates happen back on the main thread once it completes.
+//!
 //! The "Worked for" button shows the rounded duration that would be recorded
 //! if it were pressed now (`--:--` when unknown or more than 24 hours). The
 //! timestamp is read once when the window is shown and the label is refreshed
@@ -14,7 +22,11 @@
 //! - Enter is equivalent to the "Worked for" button.
 //! - Arrow Up loads the last entry for amendment; while in that mode Enter
 //!   replaces the last entry and Escape returns to normal entry. In amend mode
-//!   the button shows the amended entry's new duration.
+//!   the button shows the amended entry's new duration. Since the lookup is
+//!   asynchronous, Arrow Up always stops the key's propagation (instead of
+//!   only when an entry was actually found): there is no way to decide
+//!   whether to fall back to the default Up-arrow behaviour before the
+//!   background read completes.
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -28,6 +40,7 @@ use adw::{
 };
 use clap::Parser;
 use gtk::gdk::Key;
+use gtk::gio;
 use gtk::gio::prelude::FileExt;
 use gtk::glib::{self, ControlFlow, Propagation};
 use gtk::{
@@ -217,43 +230,74 @@ fn write_lines(lines: Vec<String>) {
     }
 }
 
+/// Runs `task` on `gio`'s I/O thread pool and detaches it immediately.
+///
+/// `gio::spawn_blocking` dispatches `task` to the thread pool eagerly, before
+/// its returned handle is ever polled; dropping that handle "detaches" the
+/// task (per its own docs), letting it run to completion without us needing
+/// its result. That's exactly what `click_start`/`record_worked`/
+/// `record_amend` want: `task` calls `process::exit` itself when done, which
+/// works from any thread, so there is nothing to synchronise back onto the
+/// main thread.
+#[allow(clippy::let_underscore_future)]
+fn spawn_detached<F>(task: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    let _ = gio::spawn_blocking(task);
+}
+
 /// Handles the "Start" button: records the current time and exits.
+///
+/// Runs on `gio`'s I/O thread pool (see [`spawn_detached`]) so the file
+/// read/write doesn't block the GTK main loop.
 ///
 /// An unparsable trailing timestamp is reported but the (unchanged) document
 /// is still written and the program exits with status 0, matching the previous
 /// behaviour.
 fn click_start() {
-    let config = config();
-    let mut lines = read_lines();
-    let current_datetime = Local::now().naive_local();
-    if let Err(e) = apply_start(&mut lines, current_datetime, &config.format) {
-        println!("Failed to parse date: {}", e);
-    }
-    write_lines(lines);
+    spawn_detached(|| {
+        let config = config();
+        let mut lines = read_lines();
+        let current_datetime = Local::now().naive_local();
+        if let Err(e) = apply_start(&mut lines, current_datetime, &config.format) {
+            println!("Failed to parse date: {}", e);
+        }
+        write_lines(lines);
+    });
 }
 
 /// Records `description` as a completed task and exits.
+///
+/// See [`spawn_detached`] for why this runs on `gio`'s I/O thread pool.
 fn record_worked(description: String) {
-    let config = config();
-    let mut lines = read_lines();
-    let current_datetime = Local::now().naive_local();
-    if let Err(e) = apply_worked(&mut lines, description, current_datetime, &config.format) {
-        eprintln!("Failed to parse date: {}", e);
-        process::exit(1);
-    }
-    write_lines(lines);
+    spawn_detached(move || {
+        let config = config();
+        let mut lines = read_lines();
+        let current_datetime = Local::now().naive_local();
+        if let Err(e) = apply_worked(&mut lines, description, current_datetime, &config.format) {
+            eprintln!("Failed to parse date: {}", e);
+            process::exit(1);
+        }
+        write_lines(lines);
+    });
 }
 
 /// Amends the last entry with `description` and exits.
+///
+/// See [`spawn_detached`] for why this runs on `gio`'s I/O thread pool.
 fn record_amend(description: String) {
-    let config = config();
-    let mut lines = read_lines();
-    let current_datetime = Local::now().naive_local();
-    if let Err(e) = amend_last_entry(&mut lines, description, current_datetime, &config.format) {
-        eprintln!("Could not amend entry: {}", e);
-        process::exit(1);
-    }
-    write_lines(lines);
+    spawn_detached(move || {
+        let config = config();
+        let mut lines = read_lines();
+        let current_datetime = Local::now().naive_local();
+        if let Err(e) = amend_last_entry(&mut lines, description, current_datetime, &config.format)
+        {
+            eprintln!("Could not amend entry: {}", e);
+            process::exit(1);
+        }
+        write_lines(lines);
+    });
 }
 
 /// Loads the configuration without exiting on failure.
@@ -297,13 +341,23 @@ impl Preview {
     /// Re-reads the last timestamp from the document and refreshes the label.
     ///
     /// The document is only peeked at: a missing timesheet is not created, and
-    /// any read or config error simply results in `--:--`.
+    /// any read or config error simply results in `--:--`. The peek itself
+    /// runs on `gio`'s I/O thread pool via `gio::spawn_blocking` (see the
+    /// module-level docs); `self.last` and the label are only touched after
+    /// that completes, back on the main thread.
     fn reload(&self) {
-        let lines = try_config()
-            .and_then(|config| peek_document(&config.destination).ok())
+        let preview = self.clone();
+        glib::spawn_future_local(async move {
+            let lines = gio::spawn_blocking(|| {
+                try_config()
+                    .and_then(|config| peek_document(&config.destination).ok())
+                    .unwrap_or_default()
+            })
+            .await
             .unwrap_or_default();
-        self.last.set(last_timestamp(&lines));
-        self.refresh();
+            preview.last.set(last_timestamp(&lines));
+            preview.refresh();
+        });
     }
 
     /// Recomputes the label from the cached start point and the current time.
@@ -341,31 +395,42 @@ fn submit(entry: &gtk::Entry, amending: bool) {
 ///
 /// Also records when the last entry started so the button shows the amended
 /// duration (`--:--` when that start cannot be determined, e.g. without a
-/// Start Time column). Returns whether amend mode was entered. Nothing happens
-/// when the document has no entry or cannot be read.
-fn start_amend(entry: &gtk::Entry, status: &Label, preview: &Preview) -> bool {
+/// Start Time column). The read runs on `gio`'s I/O thread pool via
+/// `gio::spawn_blocking` (see the module-level docs); the entry/preview/
+/// status widgets are only touched after that completes, back on the main
+/// thread. Nothing visibly happens when the document has no entry or cannot
+/// be read, matching the previous behaviour of `start_amend`.
+///
+/// Called fire-and-forget from the `Key::Up` handler, which has already
+/// unconditionally stopped the key's propagation by the time this runs (see
+/// the module-level docs).
+fn begin_amend(entry: &gtk::Entry, status: &Label, preview: &Preview) {
     let config = config();
-    match read_document(&config.destination) {
-        Ok(lines) => match last_entry_description(&lines) {
-            Some(description) => {
-                entry.set_text(&description);
-                entry.set_position(-1);
-                let now = Local::now().naive_local();
-                preview
-                    .amend_start
-                    .set(last_entry_start(&lines, now, &config.format).ok());
-                preview.amending.set(true);
-                status.set_visible(true);
-                preview.refresh();
-                true
+    let entry = entry.clone();
+    let status = status.clone();
+    let preview = preview.clone();
+    glib::spawn_future_local(async move {
+        let destination = config.destination.clone();
+        let result = gio::spawn_blocking(move || read_document(&destination))
+            .await
+            .unwrap_or_else(|_| Err("The read task panicked.".to_string()));
+        match result {
+            Ok(lines) => {
+                if let Some(description) = last_entry_description(&lines) {
+                    entry.set_text(&description);
+                    entry.set_position(-1);
+                    let now = Local::now().naive_local();
+                    preview
+                        .amend_start
+                        .set(last_entry_start(&lines, now, &config.format).ok());
+                    preview.amending.set(true);
+                    status.set_visible(true);
+                    preview.refresh();
+                }
             }
-            None => false,
-        },
-        Err(e) => {
-            eprintln!("Error opening file: {}", e);
-            false
+            Err(e) => eprintln!("Error opening file: {}", e),
         }
-    }
+    });
 }
 
 /// Leaves amend mode, clears the entry field and restores the normal label.
@@ -594,9 +659,10 @@ fn build_main_window(app: &Application) -> ApplicationWindow {
         let preview = preview.clone();
         move |_, key, _, _| match key {
             Key::Up => {
-                if preview.amending.get() || !start_amend(&entry, &status, &preview) {
+                if preview.amending.get() {
                     Propagation::Proceed
                 } else {
+                    begin_amend(&entry, &status, &preview);
                     Propagation::Stop
                 }
             }
