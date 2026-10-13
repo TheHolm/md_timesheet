@@ -53,7 +53,13 @@ on a real FreeBSD system).
   for (HH:MM)" label current: it peeks at the last timestamp when the window
   is shown and refreshes every 30 seconds (in amend mode it counts from the
   last entry's start). Deliberately thin; it only wires the widgets to the
-  library and handles I/O errors and exit codes.
+  library and handles I/O errors and exit codes. All file I/O runs on
+  `gio::spawn_blocking` (the I/O thread pool), not the GTK main loop; actions
+  that end by exiting (`click_start`, `record_worked`, `record_amend`) need no
+  further synchronisation, while actions that then update widgets (the Arrow
+  Up amend lookup, the preview reload on window `map`) await that from a
+  `glib::spawn_future_local` block so the update happens back on the main
+  thread.
 - `src/lib.rs` - all non-GUI logic, exposed publicly so the GUI and the
   integration tests share exactly one implementation: the `Destination`,
   `RecordsFormat` and `Config` types, config parsing/serialisation and config
@@ -63,10 +69,19 @@ on a real FreeBSD system).
   `new_entry`, `round_up_minutes`, `format_hhmm`), the pure state transitions
   (`apply_start`, `apply_worked`, `amend_last_entry`), the duration preview
   (`last_timestamp`, `last_entry_start`, `pending_duration`, `button_label`)
-  and the default `RECORD_FORMAT`.
+  and the default `RECORD_FORMAT`. `apply_worked`/`amend_last_entry` also
+  re-pad the one day's table a row was just added to or amended in (private
+  helpers `pad_table_rows`, `pad_last_table`, `table_bounds`, `table_cells`),
+  so that table's columns share a common width; no other day's table is ever
+  touched.
 - `tests/` - integration tests split by topic:
+  - `common/mod.rs` - shared helper (`cells`, `assert_row_eq`,
+    `assert_lines_eq`) for comparing Markdown table rows cell-by-cell so
+    column padding doesn't break assertions written before padding existed;
+    included via `mod common;` in `actions.rs`, `amend.rs` and `elapsed.rs`
   - `formatting.rs` - `new_day`/`new_entry` column selection and duration
-    rounding
+    rounding (these build raw, unpadded rows directly, so padding doesn't
+    apply here)
   - `document_io.rs` - creating, reading back, peeking at and overwriting a
     timesheet file
   - `actions.rs` - `apply_start`/`apply_worked` across empty files, same-day
@@ -77,6 +92,10 @@ on a real FreeBSD system).
     helpers, `last_timestamp`, `last_entry_start`, `pending_duration` (24-hour
     limit, clock skew) and `button_label`, and that the preview matches what
     is then written
+  - `table_padding.rs` - exact-string tests for the column padding itself:
+    widening/narrowing via `apply_worked`/`amend_last_entry`, that an
+    earlier, already-closed day's table is never touched, and that a header
+    wider than its data is left unpadded
   - `config.rs` - config parsing/serialisation, column handling and the config
     file search order
 - `Cargo.toml` - package metadata, dependencies and the `tempfile`
@@ -118,13 +137,10 @@ Work in progress. Current known issues:
 
 - Errors are written to STDERR (and to STDOUT for an unparsable last line on
   "Start"); a popup would be better.
-- File reading/writing is synchronous and runs on the GTK main loop.
 - `apply_*` only inspects the last line; the last *non-empty* line would be
   more robust.
 - Joplin note support is stubbed out (`Destination::JoplinNote` returns
   "Joplin support has not been implemented."); `reqwest` is reserved for it.
-- Table columns are not padded to a common width, so the raw Markdown is not
-  aligned as readable text.
 - Packaging for Debian/Ubuntu and FreeBSD is done only for tagged releases via
   `.woodpecker/release.yaml`; the FreeBSD package is best effort.
 

@@ -6,6 +6,57 @@ changes** summary (what also appears in the GitHub Release body) and a
 added at the top. `scripts/extract-release-notes.sh` prints just one release's
 section for the GitHub Release body.
 
+## v0.5.0 — Aligned table columns and asynchronous file I/O
+
+### User-facing changes
+
+- Markdown table columns (Description, Start Time, End Time, Duration) are
+  now padded to a common width within each day's table, so the raw file is
+  readable as aligned text, not just as rendered Markdown. Only the day's
+  table that was just added to or amended gets re-padded; every other day's
+  table is left exactly as it was.
+- The window no longer freezes while the timesheet file is read or written:
+  all file I/O now runs on a background thread pool instead of the GTK main
+  loop. The app still terminates immediately after "Start"/"Worked for"/amend,
+  same as before.
+
+### Details
+
+- `src/lib.rs`: added `table_cells` (replaces the old exact-match
+  `strip_prefix("| ")`/`strip_suffix(" |")` parsing in `first_cell` and
+  `entry_start_time` with trimmed, whitespace-tolerant cell splitting, so
+  padded cells still parse correctly), `is_table_row`, `pad_table_rows`,
+  `table_bounds` and `pad_last_table`. `apply_worked` calls `pad_last_table`
+  right after appending each new row (before any trailing day-boundary or
+  timestamp line is pushed), and `amend_last_entry` calls `table_bounds` +
+  `pad_table_rows` after rewriting the amended row; both are what keep
+  padding scoped to only the table that was actually touched. The separator
+  row's dash count is never stretched (it stays exactly `---`), but its cell
+  is still padded with trailing spaces like any other cell so the `|`
+  characters line up with the rest of the table.
+- `src/main.rs`: all file I/O moved off the GTK main loop onto `gio`'s I/O
+  thread pool via `gio::spawn_blocking`. `click_start`/`record_worked`/
+  `record_amend` end by calling `process::exit`, which works from any
+  thread, so their background task needs no further synchronisation.
+  `Preview::reload` and the new `begin_amend` (replacing `start_amend`,
+  which returned a `bool` the caller used to decide event propagation)
+  instead await that background task inside a `glib::spawn_future_local`
+  block, so the widget updates they make afterwards happen back on the main
+  thread. Since the amend lookup is now asynchronous, the `Key::Up` handler
+  can no longer decide propagation based on whether an entry was found, so
+  Arrow Up now always stops propagation (instead of only when amend mode was
+  actually entered).
+- `tests/`: added `tests/table_padding.rs` with exact-string assertions for
+  the padding behaviour itself (widening/narrowing, an earlier day's table
+  never being touched, a header wider than its data staying unpadded). The
+  existing `actions.rs`/`amend.rs`/`elapsed.rs` table-row assertions were
+  switched to cell-by-cell comparison via a new shared `tests/common/mod.rs`
+  helper (`cells`, `assert_row_eq`, `assert_lines_eq`), so they don't need to
+  encode the exact padded width. `tests/formatting.rs` and
+  `tests/document_io.rs` needed no changes: padding only happens inside
+  `apply_worked`/`amend_last_entry`, not in `new_day`/`new_entry` or the
+  raw `read_document`/`write_document`/`peek_document`.
+
 ## v0.4.0 — Duration preview on the "Worked for" button
 
 ### User-facing changes

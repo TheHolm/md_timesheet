@@ -61,10 +61,15 @@ All errors are sent to STDERR at the moment; better error handling is in the pla
 #   2 January
 
 | Description | Start Time | End Time | Duration |
-| --- | --- | --- | --- |
-| Doing Stuff | 12:00 | 13:02 | 01:10 |
+| ---         | ---        | ---      | ---      |
+| Doing Stuff | 12:00      | 13:02    | 01:10    |
 24/12/2024 15:41
 ```
+
+Columns are padded so each one has a common width across the header,
+separator and every entry in that day's table; adding a wider entry (or
+amending one to be wider or narrower) re-pads the whole table it belongs to,
+but never any other day's table.
 
 last line contains timestamp of last operation formated as  %d/%m/%Y %H:%M (example 24/12/2024 15:41)
 
@@ -138,11 +143,8 @@ The GUI in `src/main.rs` is a thin wrapper and is not covered by the tests.
 # TODO
 
 * Proper error handling; a popup window needs to be displayed instead of writing to STDERR.
-* Reading and writing changes need to be asynchronous and not performed from the main loop.
 * Check the last non-empty line for the timestamp instead of just the last line.
 * Joplin note support
-* Packaging for Debian/Ubuntu and possibly something else.
-* Improved formatting for the tables with all columns of the same width so that they are easily readable as text.
 
 # Notes:
 * API DOC https://joplinapp.org/help/api/references/rest_api/
