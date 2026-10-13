@@ -3,6 +3,9 @@
 use chrono::NaiveDate;
 use md_timesheet::{amend_last_entry, last_entry_description, RecordsFormat, RECORD_FORMAT};
 
+mod common;
+use common::assert_row_eq;
+
 /// Builds a `NaiveDateTime` for the given calendar fields.
 fn dt(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::NaiveDateTime {
     NaiveDate::from_ymd_opt(year, month, day)
@@ -93,7 +96,7 @@ fn amend_updates_last_entry() {
     )
     .unwrap();
 
-    assert_eq!(lines[4], "| Revised | 12:00 | 14:05 | 02:10 |");
+    assert_row_eq(&lines[4], "| Revised | 12:00 | 14:05 | 02:10 |");
     assert_eq!(lines[5], "02/01/2024 14:05");
 }
 
@@ -113,8 +116,8 @@ fn amend_preserves_earlier_entries() {
     )
     .unwrap();
 
-    assert_eq!(lines[4], "| First | 09:00 | 10:00 | 01:00 |");
-    assert_eq!(lines[5], "| Second Revised | 10:00 | 11:30 | 01:30 |");
+    assert_row_eq(&lines[4], "| First | 09:00 | 10:00 | 01:00 |");
+    assert_row_eq(&lines[5], "| Second Revised | 10:00 | 11:30 | 01:30 |");
     assert_eq!(lines[6], "02/01/2024 11:30");
 }
 
@@ -133,7 +136,7 @@ fn amend_handles_midnight_rollover() {
     )
     .unwrap();
 
-    assert_eq!(lines[4], "| Doing Stuff | 23:30 | 00:20 | 00:50 |");
+    assert_row_eq(&lines[4], "| Doing Stuff | 23:30 | 00:20 | 00:50 |");
     assert_eq!(lines[5], "02/01/2024 00:20");
 }
 

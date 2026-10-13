@@ -8,6 +8,9 @@ use md_timesheet::{
     pending_duration, round_up_minutes, RecordsFormat, MAX_PENDING_MINUTES, RECORD_FORMAT,
 };
 
+mod common;
+use common::assert_row_eq;
+
 /// Builds a `NaiveDateTime` for the given calendar fields.
 fn dt(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> NaiveDateTime {
     NaiveDate::from_ymd_opt(year, month, day)
@@ -210,9 +213,9 @@ fn pending_duration_matches_recorded_entry() {
     apply_worked(&mut lines, "Next".to_string(), now, &RECORD_FORMAT).unwrap();
 
     assert_eq!(pending, "01:20");
-    assert_eq!(
-        lines[lines.len() - 2],
-        format!("| Next | 09:30 | 10:43 | {} |", pending)
+    assert_row_eq(
+        &lines[lines.len() - 2],
+        &format!("| Next | 09:30 | 10:43 | {} |", pending),
     );
 }
 
@@ -281,7 +284,10 @@ fn amend_preview_matches_amended_entry() {
     amend_last_entry(&mut lines, "Task".to_string(), now, &RECORD_FORMAT).unwrap();
 
     assert_eq!(pending, "01:10");
-    assert_eq!(lines[4], format!("| Task | 09:00 | 10:02 | {} |", pending));
+    assert_row_eq(
+        &lines[4],
+        &format!("| Task | 09:00 | 10:02 | {} |", pending),
+    );
 }
 
 /// A known duration is shown in brackets after "Worked for".

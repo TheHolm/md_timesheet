@@ -617,7 +617,9 @@ pub fn apply_start(
 /// to `current_datetime`, which is then written to the final line. On an empty
 /// document a whole new day is created first; when the previous timestamp
 /// belongs to an earlier day the entry is added to that day and a new day is
-/// started afterwards.
+/// started afterwards. After the new row is added, the day's table it
+/// belongs to (and only that one) is re-padded (see [`pad_last_table`]) so
+/// its columns stay aligned.
 ///
 /// Returns `Err` when the final line is not a parsable timestamp, leaving
 /// `lines` unchanged in that case.
@@ -635,6 +637,7 @@ pub fn apply_worked(
             &current_datetime,
             format,
         ));
+        pad_last_table(lines);
         lines.push(current_datetime.format(TIMESTAMP_FORMAT).to_string());
     } else if let Some(last_line) = lines.last() {
         match NaiveDateTime::parse_from_str(last_line, TIMESTAMP_FORMAT) {
@@ -647,6 +650,7 @@ pub fn apply_worked(
                         &current_datetime,
                         format,
                     ));
+                    pad_last_table(lines);
                     lines.push(current_datetime.format(TIMESTAMP_FORMAT).to_string());
                 } else {
                     lines.pop();
@@ -656,6 +660,7 @@ pub fn apply_worked(
                         &current_datetime,
                         format,
                     ));
+                    pad_last_table(lines);
                     lines.push("".to_string());
                     lines.append(&mut new_day(&current_datetime, format));
                     lines.push(current_datetime.format(TIMESTAMP_FORMAT).to_string());
@@ -681,23 +686,109 @@ fn is_entry_row(line: &str) -> bool {
     matches!(first_cell(line), Some(cell) if cell != "Description" && cell != "---")
 }
 
+/// Splits a Markdown table `line` into its trimmed cells.
+///
+/// Returns `None` when `line` is not a `| ... |` row. Each cell is trimmed,
+/// so this is tolerant of the column padding added by [`pad_table_rows`]:
+/// `"| 12:00      |"` and `"| 12:00 |"` both yield `["12:00"]`.
+fn table_cells(line: &str) -> Option<Vec<&str>> {
+    let trimmed = line.trim();
+    if trimmed.len() < 2 || !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return None;
+    }
+    Some(
+        trimmed[1..trimmed.len() - 1]
+            .split('|')
+            .map(str::trim)
+            .collect(),
+    )
+}
+
+/// Returns whether `line` parses as a Markdown table row at all (header,
+/// separator or data row).
+fn is_table_row(line: &str) -> bool {
+    table_cells(line).is_some()
+}
+
 /// Extracts the first cell of a Markdown table `line`.
 ///
 /// Returns `None` when `line` is not a `| ... |` row.
 fn first_cell(line: &str) -> Option<&str> {
-    let inner = line.strip_prefix("| ")?.strip_suffix(" |")?;
-    match inner.split_once(" | ") {
-        Some((cell, _rest)) => Some(cell),
-        None => Some(inner),
-    }
+    table_cells(line)?.into_iter().next()
 }
 
 /// Extracts the start time from an entry row that has a "Start Time" column.
 fn entry_start_time(line: &str) -> Option<NaiveTime> {
-    let inner = line.strip_prefix("| ")?.strip_suffix(" |")?;
-    let (_description, rest) = inner.split_once(" | ")?;
-    let (start, _rest) = rest.split_once(" | ")?;
-    NaiveTime::parse_from_str(start, "%H:%M").ok()
+    let cells = table_cells(line)?;
+    NaiveTime::parse_from_str(cells.get(1)?, "%H:%M").ok()
+}
+
+/// Re-pads every cell in `rows` so each column has a common width.
+///
+/// `rows` must all be `| ... |` table rows (header, separator and data rows
+/// alike) belonging to the same table; the separator row is padded like any
+/// other row (its cell text stays exactly `"---"`, it just gets trailing
+/// spaces so its `|` characters still line up with the rest of the table).
+/// Column width is measured in `char`s. Rows with fewer cells than the
+/// widest row are padded only for the cells they have.
+fn pad_table_rows(rows: &mut [String]) {
+    let parsed: Vec<Vec<String>> = rows
+        .iter()
+        .filter_map(|r| table_cells(r))
+        .map(|cells| cells.into_iter().map(str::to_string).collect())
+        .collect();
+    let columns = parsed.iter().map(|cells| cells.len()).max().unwrap_or(0);
+    let mut widths = vec![0usize; columns];
+    for cells in &parsed {
+        for (i, cell) in cells.iter().enumerate() {
+            widths[i] = widths[i].max(cell.chars().count());
+        }
+    }
+    for (line, cells) in rows.iter_mut().zip(parsed.iter()) {
+        let padded: Vec<String> = cells
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| format!("{:<width$}", cell, width = widths[i]))
+            .collect();
+        *line = format!("| {} |", padded.join(" | "));
+    }
+}
+
+/// Returns the start and one-past-the-end index of the contiguous run of
+/// table rows in `lines` that contains `index`.
+///
+/// Walks backward and forward from `index` while the neighbouring line
+/// [`is_table_row`], stopping at the first blank line, day heading or
+/// timestamp line in either direction. This is what keeps padding scoped to
+/// a single day's table instead of a neighbouring one.
+fn table_bounds(lines: &[String], index: usize) -> (usize, usize) {
+    let mut start = index;
+    while start > 0 && is_table_row(&lines[start - 1]) {
+        start -= 1;
+    }
+    let mut end = index + 1;
+    while end < lines.len() && is_table_row(&lines[end]) {
+        end += 1;
+    }
+    (start, end)
+}
+
+/// Re-pads the table at the very end of `lines`.
+///
+/// Intended to be called right after appending a new row and before
+/// appending anything else (a day heading, the trailing timestamp, ...), so
+/// the backward walk finds exactly the table that row was just added to.
+/// Does nothing when `lines` is empty.
+fn pad_last_table(lines: &mut [String]) {
+    let len = lines.len();
+    if len == 0 {
+        return;
+    }
+    let mut start = len;
+    while start > 0 && is_table_row(&lines[start - 1]) {
+        start -= 1;
+    }
+    pad_table_rows(&mut lines[start..len]);
 }
 
 /// Returns the description of the last entry in the document, if there is one.
@@ -747,7 +838,10 @@ pub fn last_entry_start(
 ///
 /// The last entry row keeps its start time (see [`last_entry_start`]) but gets
 /// the new `description`, an end time of `current_datetime` and a recomputed
-/// duration; the trailing timestamp is then updated.
+/// duration; the trailing timestamp is then updated. The whole day's table
+/// the amended entry belongs to (header, separator and every entry; see
+/// [`table_bounds`]) is then re-padded, since the new description's length
+/// may change the required column width.
 ///
 /// Requires the format to include the "Start Time" column. Returns `Err`,
 /// leaving `lines` unchanged, when there is no entry, the start time cannot be
@@ -765,6 +859,9 @@ pub fn amend_last_entry(
     lines[index] = row
         .pop()
         .ok_or_else(|| "Could not build the amended entry.".to_string())?;
+
+    let (start, end) = table_bounds(lines, index);
+    pad_table_rows(&mut lines[start..end]);
 
     let last_index = lines.len() - 1;
     lines[last_index] = current_datetime.format(TIMESTAMP_FORMAT).to_string();
@@ -789,5 +886,129 @@ mod tests {
         let error = parse_bool("start_time", "yes", 3).unwrap_err();
         assert!(error.contains("start_time"));
         assert!(error.contains("Line 3"));
+    }
+
+    /// `table_cells` splits a row into trimmed cells.
+    #[test]
+    fn table_cells_splits_and_trims() {
+        assert_eq!(
+            table_cells("| Doing Stuff | 12:00 |"),
+            Some(vec!["Doing Stuff", "12:00"])
+        );
+        assert_eq!(
+            table_cells("| 12:00      | 13:02    |"),
+            Some(vec!["12:00", "13:02"])
+        );
+    }
+
+    /// `table_cells` returns `None` for anything that is not a `| ... |` row.
+    #[test]
+    fn table_cells_rejects_non_rows() {
+        assert_eq!(table_cells("#  2 January"), None);
+        assert_eq!(table_cells(""), None);
+        assert_eq!(table_cells("24/12/2024 15:41"), None);
+        assert_eq!(table_cells("|"), None);
+    }
+
+    /// `is_table_row` recognises header, separator and data rows alike.
+    #[test]
+    fn is_table_row_recognises_every_kind_of_row() {
+        assert!(is_table_row("| Description | Start Time |"));
+        assert!(is_table_row("| --- | --- |"));
+        assert!(is_table_row("| Doing Stuff | 12:00 |"));
+        assert!(!is_table_row("#  2 January"));
+        assert!(!is_table_row(""));
+    }
+
+    /// `pad_table_rows` widens every row's cells to the widest cell in each
+    /// column, including the separator row, and leaves shorter cells intact.
+    #[test]
+    fn pad_table_rows_aligns_columns() {
+        let mut rows = vec![
+            "| Description | Start Time |".to_string(),
+            "| --- | --- |".to_string(),
+            "| A longer task | 09:30 |".to_string(),
+        ];
+        pad_table_rows(&mut rows);
+        assert_eq!(rows[0], "| Description   | Start Time |");
+        assert_eq!(rows[1], "| ---           | ---        |");
+        assert_eq!(rows[2], "| A longer task | 09:30      |");
+    }
+
+    /// `pad_table_rows` is idempotent: padding an already-padded table
+    /// reproduces the same text.
+    #[test]
+    fn pad_table_rows_is_idempotent() {
+        let mut rows = vec![
+            "| Description | Start Time |".to_string(),
+            "| --- | --- |".to_string(),
+            "| A longer task | 09:30 |".to_string(),
+        ];
+        pad_table_rows(&mut rows);
+        let once = rows.clone();
+        pad_table_rows(&mut rows);
+        assert_eq!(rows, once);
+    }
+
+    /// `table_bounds` finds exactly the contiguous table rows around a given
+    /// index, stopping at the blank line separating two days.
+    #[test]
+    fn table_bounds_stops_at_day_boundary() {
+        let lines = vec![
+            "#  1 January".to_string(),
+            "".to_string(),
+            "| Description | Start Time |".to_string(),
+            "| --- | --- |".to_string(),
+            "| First | 09:00 |".to_string(),
+            "".to_string(),
+            "#  2 January".to_string(),
+            "".to_string(),
+            "| Description | Start Time |".to_string(),
+            "| --- | --- |".to_string(),
+            "| Second | 09:00 |".to_string(),
+            "24/12/2024 15:41".to_string(),
+        ];
+        assert_eq!(table_bounds(&lines, 4), (2, 5));
+        assert_eq!(table_bounds(&lines, 10), (8, 11));
+    }
+
+    /// `pad_last_table` re-pads only the table at the end of `lines`,
+    /// leaving an earlier, already-closed day's table untouched.
+    #[test]
+    fn pad_last_table_only_touches_the_last_table() {
+        let mut lines = vec![
+            "#  1 January".to_string(),
+            "".to_string(),
+            "| Description | Start Time |".to_string(),
+            "| --- | --- |".to_string(),
+            "| First | 09:00 |".to_string(),
+            "".to_string(),
+            "#  2 January".to_string(),
+            "".to_string(),
+            "| Description | Start Time |".to_string(),
+            "| --- | --- |".to_string(),
+            "| A much longer second task | 09:00 |".to_string(),
+        ];
+        let first_day_before = lines[2..5].to_vec();
+        pad_last_table(&mut lines);
+        assert_eq!(lines[2..5], first_day_before[..]);
+        assert_eq!(
+            table_cells(&lines[8]),
+            Some(vec!["Description", "Start Time"])
+        );
+        assert_eq!(
+            table_cells(&lines[10]),
+            Some(vec!["A much longer second task", "09:00"])
+        );
+        // The description column widened to fit the new entry, so both the
+        // header and the entry row now share the same, longer, column width.
+        assert_eq!(
+            format!("| {:<25} | {:<10} |", "Description", "Start Time"),
+            lines[8]
+        );
+        assert_eq!(
+            format!("| {:<25} | {:<10} |", "A much longer second task", "09:00"),
+            lines[10]
+        );
     }
 }

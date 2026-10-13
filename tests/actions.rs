@@ -3,6 +3,9 @@
 use chrono::NaiveDate;
 use md_timesheet::{apply_start, apply_worked, new_day, RECORD_FORMAT};
 
+mod common;
+use common::assert_lines_eq;
+
 /// Builds a `NaiveDateTime` for the given calendar fields.
 fn dt(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::NaiveDateTime {
     NaiveDate::from_ymd_opt(year, month, day)
@@ -96,7 +99,7 @@ fn worked_empty_document() {
     let mut expected = january_second();
     expected.push("| Doing Stuff | 12:00 | 12:00 | 00:00 |".to_string());
     expected.push("02/01/2024 12:00".to_string());
-    assert_eq!(lines, expected);
+    assert_lines_eq(&lines, &expected);
 }
 
 /// "Worked on" on the same day appends an entry from the previous timestamp.
@@ -116,7 +119,7 @@ fn worked_same_day() {
     let mut expected = january_second();
     expected.push("| Doing Stuff | 10:00 | 11:30 | 01:30 |".to_string());
     expected.push("02/01/2024 11:30".to_string());
-    assert_eq!(lines, expected);
+    assert_lines_eq(&lines, &expected);
 }
 
 /// "Worked on" across midnight closes the previous day and starts a new one.
@@ -138,7 +141,7 @@ fn worked_rolls_over_midnight() {
     expected.push("".to_string());
     expected.extend(new_day(&dt(2024, 1, 2, 0, 20), &RECORD_FORMAT));
     expected.push("02/01/2024 00:20".to_string());
-    assert_eq!(lines, expected);
+    assert_lines_eq(&lines, &expected);
 }
 
 /// "Worked on" with an unparsable trailing line errors and changes nothing.
